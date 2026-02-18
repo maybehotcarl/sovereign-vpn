@@ -1,6 +1,6 @@
-# Sovereign VPN
+# 6529 VPN
 
-**An NFT-Gated, Reputation-Based, DAO-Governed Decentralized VPN Network**
+**An NFT-Gated, Reputation-Based, Community-Governed Decentralized VPN Network**
 
 Built for and governed by the [6529 community](https://seize.io).
 
