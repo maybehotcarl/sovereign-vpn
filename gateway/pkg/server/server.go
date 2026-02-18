@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/config"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/nftcheck"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/nftgate"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/siwe"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/wireguard"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
 
 // Server is the Sovereign VPN gateway.

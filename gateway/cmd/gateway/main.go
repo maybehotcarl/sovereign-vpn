@@ -5,10 +5,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/config"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/nftcheck"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/server"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/wireguard"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
 
 func main() {

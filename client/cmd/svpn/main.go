@@ -14,9 +14,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/maybehotcarl/sovereign-vpn/client/internal/api"
-	"github.com/maybehotcarl/sovereign-vpn/client/internal/wallet"
-	"github.com/maybehotcarl/sovereign-vpn/client/internal/wgconf"
+	"github.com/maybehotcarl/sovereign-vpn/client/pkg/api"
+	"github.com/maybehotcarl/sovereign-vpn/client/pkg/wallet"
+	"github.com/maybehotcarl/sovereign-vpn/client/pkg/wgconf"
 )
 
 func main() {

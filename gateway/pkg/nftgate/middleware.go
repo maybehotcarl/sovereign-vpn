@@ -18,7 +18,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/maybehotcarl/sovereign-vpn/gateway/internal/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 )
 
 // Session represents an authenticated VPN session.
