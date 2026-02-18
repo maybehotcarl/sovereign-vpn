@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  contracts:
+    name: Solidity Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run forge tests
+        working-directory: contracts
+        run: forge test -vvv
+
+  gateway:
+    name: Gateway Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build
+        working-directory: gateway
+        run: go build ./...
+
+      - name: Test
+        working-directory: gateway
+        run: go test -race -count=1 ./...
+
+  client:
+    name: Client Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build
+        working-directory: client
+        run: go build ./...
+
+      - name: Test
+        working-directory: client
+        run: go test -race -count=1 ./...
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [gateway, client]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Test
+        working-directory: integration
+        run: go test -race -v -count=1 ./...

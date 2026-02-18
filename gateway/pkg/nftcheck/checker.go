@@ -3,6 +3,7 @@ package nftcheck
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -45,12 +46,18 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
+// DelegationFinder looks up cold wallets that have delegated to a hot wallet.
+type DelegationFinder interface {
+	FindVaults(ctx context.Context, hotWallet common.Address) ([]common.Address, error)
+}
+
 // Checker queries the AccessPolicy contract to determine a wallet's VPN access tier.
 type Checker struct {
 	client       *ethclient.Client
 	policyAddr   common.Address
 	policyABI    abi.ABI
 	cacheTTL     time.Duration
+	delegation   DelegationFinder // optional, nil if delegation not configured
 	mu           sync.RWMutex
 	cache        map[common.Address]cacheEntry
 }
@@ -91,7 +98,14 @@ func NewChecker(rpcURL string, policyAddress string, cacheTTL time.Duration) (*C
 	return c, nil
 }
 
+// SetDelegation configures a delegation finder for cold wallet lookups.
+func (c *Checker) SetDelegation(d DelegationFinder) {
+	c.delegation = d
+}
+
 // Check queries the AccessPolicy contract for a wallet's access tier.
+// If delegation is configured and the direct check returns denied,
+// it also checks cold wallets that have delegated to this wallet.
 // Results are cached for cacheTTL duration.
 func (c *Checker) Check(ctx context.Context, wallet common.Address) (CheckResult, error) {
 	// Check cache first
@@ -102,49 +116,33 @@ func (c *Checker) Check(ctx context.Context, wallet common.Address) (CheckResult
 	}
 	c.mu.RUnlock()
 
-	// Call AccessPolicy.checkAccess(address) on-chain
-	callData, err := c.policyABI.Pack("checkAccess", wallet)
+	// Direct on-chain check
+	tier, err := c.checkOnChain(ctx, wallet)
 	if err != nil {
-		return CheckResult{}, fmt.Errorf("packing call data: %w", err)
+		return CheckResult{}, err
 	}
 
-	msg := ethereum.CallMsg{
-		To:   &c.policyAddr,
-		Data: callData,
-	}
-
-	output, err := c.client.CallContract(ctx, msg, nil)
-	if err != nil {
-		return CheckResult{}, fmt.Errorf("calling AccessPolicy.checkAccess: %w", err)
-	}
-
-	// Decode the response: (bool access, bool free)
-	results, err := c.policyABI.Unpack("checkAccess", output)
-	if err != nil {
-		return CheckResult{}, fmt.Errorf("unpacking response: %w", err)
-	}
-
-	if len(results) != 2 {
-		return CheckResult{}, fmt.Errorf("expected 2 return values, got %d", len(results))
-	}
-
-	access, ok := results[0].(bool)
-	if !ok {
-		return CheckResult{}, fmt.Errorf("unexpected type for access: %T", results[0])
-	}
-	free, ok := results[1].(bool)
-	if !ok {
-		return CheckResult{}, fmt.Errorf("unexpected type for free: %T", results[1])
-	}
-
-	var tier AccessTier
-	switch {
-	case free:
-		tier = TierFree
-	case access:
-		tier = TierPaid
-	default:
-		tier = TierDenied
+	// If direct check denied and delegation is configured, check vault wallets
+	if tier == TierDenied && c.delegation != nil {
+		vaults, err := c.delegation.FindVaults(ctx, wallet)
+		if err != nil {
+			log.Printf("[nftcheck] delegation lookup failed for %s: %v", wallet.Hex(), err)
+		}
+		for _, vault := range vaults {
+			vaultTier, err := c.checkOnChain(ctx, vault)
+			if err != nil {
+				log.Printf("[nftcheck] vault check failed for %s: %v", vault.Hex(), err)
+				continue
+			}
+			if vaultTier > tier {
+				tier = vaultTier
+				log.Printf("[nftcheck] delegation: %s delegates from %s (tier=%s)",
+					wallet.Hex(), vault.Hex(), tier)
+			}
+			if tier == TierFree {
+				break // best possible tier
+			}
+		}
 	}
 
 	result := CheckResult{
@@ -161,6 +159,49 @@ func (c *Checker) Check(ctx context.Context, wallet common.Address) (CheckResult
 	c.mu.Unlock()
 
 	return result, nil
+}
+
+// checkOnChain calls AccessPolicy.checkAccess(address) and returns the tier.
+func (c *Checker) checkOnChain(ctx context.Context, wallet common.Address) (AccessTier, error) {
+	callData, err := c.policyABI.Pack("checkAccess", wallet)
+	if err != nil {
+		return TierDenied, fmt.Errorf("packing call data: %w", err)
+	}
+
+	output, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &c.policyAddr,
+		Data: callData,
+	}, nil)
+	if err != nil {
+		return TierDenied, fmt.Errorf("calling AccessPolicy.checkAccess: %w", err)
+	}
+
+	results, err := c.policyABI.Unpack("checkAccess", output)
+	if err != nil {
+		return TierDenied, fmt.Errorf("unpacking response: %w", err)
+	}
+
+	if len(results) != 2 {
+		return TierDenied, fmt.Errorf("expected 2 return values, got %d", len(results))
+	}
+
+	access, ok := results[0].(bool)
+	if !ok {
+		return TierDenied, fmt.Errorf("unexpected type for access: %T", results[0])
+	}
+	free, ok := results[1].(bool)
+	if !ok {
+		return TierDenied, fmt.Errorf("unexpected type for free: %T", results[1])
+	}
+
+	switch {
+	case free:
+		return TierFree, nil
+	case access:
+		return TierPaid, nil
+	default:
+		return TierDenied, nil
+	}
 }
 
 // Invalidate removes a cached result for a wallet (used when transfer events are detected).
