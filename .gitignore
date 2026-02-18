@@ -1,0 +1,17 @@
+# Research repos (cloned for reference, not part of this project)
+research/dvpn-node/
+research/sentinel-go-sdk/
+
+# Foundry build artifacts
+contracts/out/
+contracts/cache/
+
+# Node modules
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
