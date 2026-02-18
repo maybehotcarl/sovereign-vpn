@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "51820:51820/udp"
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - ./gateway/config.json:/etc/sovereign-vpn/config.json:ro
+    command:
+      - "--config=/etc/sovereign-vpn/config.json"
+      - "--wg-interface=wg0"
+      - "--wg-endpoint=${VPN_ENDPOINT:-vpn.example.com:51820}"
+      - "--wg-pubkey=${WG_SERVER_PUBKEY}"
+      - "--eth-ws=${ETH_WS_URL:-}"
+      - "--delegation"
+    restart: unless-stopped
+    networks:
+      - vpn
+
+networks:
+  vpn:
+    driver: bridge

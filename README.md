@@ -15,62 +15,150 @@ Sovereign VPN is a decentralized VPN where:
 - **Node operators stake ETH and earn reputation.** Quality is enforced by an on-chain reputation system with slashing for misbehavior.
 - **All governance is TDH-weighted.** No new token. No new voting system. Decisions happen on [seize.io](https://seize.io) using existing 6529 network infrastructure.
 
-The network builds on the [Sentinel dVPN](https://github.com/sentinel-official/dvpn-node) open-source protocol and adds three layers: Memes-gated access, reputation scoring, and TDH governance.
-
-## Why?
-
-Existing dVPNs (Sentinel, Mysterium, Orchid) solve the networking layer but have:
-- Weak identity models (anyone can connect)
-- No meaningful reputation systems (trust is assumed)
-- Centralized or foundation-led governance
-
-The 6529 ecosystem's thesis -- that open NFTs can replace accounts and communities can self-govern infrastructure -- has not been applied to privacy infrastructure. Until now.
-
-## Read the Spec
-
-**[TECHNICAL-SPEC.md](./TECHNICAL-SPEC.md)** -- Full technical specification including architecture, smart contracts, reputation system, governance model, and a sprint-level build plan.
-
 ## Project Status
 
-**Phase 0: Proof of Concept** -- Not started. Looking for contributors.
+**Phase 0: In Active Development**
 
-See the [Sprint 1 issues](../../issues) to find tasks you can pick up.
+| Component | Status | Tests |
+|-----------|--------|-------|
+| Smart Contracts (AccessPolicy, TestMemes) | Built | 38 passing |
+| SIWE Authentication Gateway | Built | 9 passing |
+| NFT Gate Middleware + Sessions | Built | 11 passing |
+| WireGuard Peer Manager | Built | 11 passing |
+| Delegation Support (delegate.xyz + 6529) | Built | 5 passing |
+| Transfer Event Revocation | Built | 5 passing |
+| CLI Client (`svpn`) | Built | 19 passing |
+| End-to-End Integration Tests | Built | 7 passing |
+| GitHub Actions CI | Configured | - |
+| Docker Support | Configured | - |
 
-## Architecture Overview
+**Total: 105 tests across Solidity + Go**
+
+## Architecture
 
 ```
-User Device (Wallet + VPN Client)
-        |
-        v
-Access Gateway (SIWE auth + Memes card check)
-        |
-        v
-Sentinel dVPN Layer (WireGuard tunnels + bandwidth tracking)
-        |
-        v
-Ethereum Smart Contracts (AccessPolicy + Reputation + Parameters)
+┌─────────────────────────────────────────────────┐
+│                   User Device                    │
+│  svpn CLI: keygen → connect → status             │
+│  Wallet (ERC-191 signing) + WireGuard client     │
+└──────────────────────┬──────────────────────────┘
+                       │
+              HTTPS (SIWE auth)
+                       │
+┌──────────────────────▼──────────────────────────┐
+│               Access Gateway                     │
+│  POST /auth/challenge  → SIWE nonce              │
+│  POST /auth/verify     → NFT check → session     │
+│  POST /vpn/connect     → WireGuard peer config   │
+│  POST /vpn/disconnect  → peer removal            │
+│  GET  /vpn/status      → session info            │
+│  GET  /health          → gateway status           │
+│                                                  │
+│  ┌─────────────┐ ┌──────────────┐ ┌───────────┐ │
+│  │ NFT Checker  │ │  Delegation  │ │ Revocation│ │
+│  │ AccessPolicy │ │ delegate.xyz │ │ Transfer  │ │
+│  │ on-chain call│ │ 6529 registry│ │ events WS │ │
+│  └─────────────┘ └──────────────┘ └───────────┘ │
+└──────────────────────┬──────────────────────────┘
+                       │
+              WireGuard (UDP :51820)
+                       │
+┌──────────────────────▼──────────────────────────┐
+│            Ethereum Smart Contracts              │
+│  AccessPolicy.sol   - NFT ownership → tier       │
+│  TestMemes.sol      - Sepolia test ERC-1155      │
+└─────────────────────────────────────────────────┘
+```
+
+## Quick Start
+
+### Build
+
+```bash
+make build           # builds bin/sovereign-gateway and bin/svpn
+make test            # runs all tests (Solidity + Go + integration)
+make docker-build    # builds Docker images
+```
+
+### Generate a wallet
+
+```bash
+./bin/svpn keygen --out wallet.key
+# Address: 0x...
+# Private key saved to: wallet.key
+```
+
+### Connect to a gateway
+
+```bash
+./bin/svpn connect \
+  --gateway http://your-gateway:8080 \
+  --key wallet.key
+
+# Writes sovereign-vpn.conf — activate with:
+sudo wg-quick up ./sovereign-vpn.conf
+```
+
+### Run a gateway node
+
+```bash
+./bin/sovereign-gateway \
+  --listen :8080 \
+  --eth-rpc 'https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY' \
+  --policy-contract '0xYOUR_ACCESS_POLICY' \
+  --memes-contract '0x33fd426905f149f8376e227d0c9d3340aad17af1' \
+  --wg-interface wg0 \
+  --wg-pubkey 'YOUR_WG_PUBLIC_KEY' \
+  --wg-endpoint 'your-server:51820' \
+  --delegation
+```
+
+See [deploy/setup-node.sh](deploy/setup-node.sh) for full VPS setup.
+
+## Repository Structure
+
+```
+sovereign-vpn/
+├── contracts/          # Solidity (Foundry)
+│   ├── src/
+│   │   ├── AccessPolicy.sol    # NFT ownership → VPN access tiers
+│   │   └── TestMemes.sol       # Test ERC-1155 for Sepolia
+│   └── test/                   # 38 Foundry tests
+├── gateway/            # Go gateway server
+│   ├── cmd/gateway/            # Entry point with graceful shutdown
+│   ├── pkg/
+│   │   ├── config/             # JSON config loader
+│   │   ├── siwe/               # EIP-4361 challenge/verify
+│   │   ├── nftcheck/           # AccessPolicy on-chain checker + delegation
+│   │   ├── nftgate/            # Session management + HTTP middleware
+│   │   ├── wireguard/          # Peer lifecycle + IP pool
+│   │   ├── delegation/         # delegate.xyz v2 + 6529 registry
+│   │   ├── revocation/         # ERC-1155 transfer event watcher
+│   │   └── server/             # HTTP handlers + revoker
+│   └── Dockerfile
+├── client/             # Go CLI client
+│   ├── cmd/svpn/               # CLI entry point
+│   ├── pkg/
+│   │   ├── api/                # Gateway HTTP client
+│   │   ├── wallet/             # Ethereum key management + ERC-191 signing
+│   │   └── wgconf/             # WireGuard config generation
+│   └── Dockerfile
+├── integration/        # End-to-end tests with mock Ethereum RPC
+├── deploy/             # VPS setup scripts
+├── research/           # Sentinel handshake analysis
+└── .github/workflows/  # CI pipeline
 ```
 
 ## How to Contribute
 
-This project needs:
-
 | Role | What You'd Work On |
 |------|-------------------|
-| **Go developer** | Sentinel node middleware, gateway, liveness monitor (heaviest workload) |
-| **Solidity developer** | AccessPolicy, NodeRegistry, SessionManager, PaymentSplitter |
+| **Go developer** | Sentinel node middleware, gateway, liveness monitor |
+| **Solidity developer** | NodeRegistry, SessionManager, PaymentSplitter |
 | **Frontend developer** | Desktop/mobile client: wallet connect + VPN in one app |
-| **DevOps** | Node deployment, monitoring, infrastructure |
+| **DevOps** | Node deployment, monitoring, multi-region infrastructure |
 
 If you're in the 6529 community and want to help build this, open an issue or reach out.
-
-### Getting Started (Development)
-
-The project is in early planning. To get oriented:
-
-1. Read [TECHNICAL-SPEC.md](./TECHNICAL-SPEC.md)
-2. Look at the open issues for Sprint 1 tasks
-3. Check out the Sentinel node codebase: [sentinel-official/dvpn-node](https://github.com/sentinel-official/dvpn-node)
 
 ## Key Links
 

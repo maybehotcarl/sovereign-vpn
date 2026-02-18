@@ -1,0 +1,12 @@
+{
+  "listen_addr": ":8080",
+  "ethereum_rpc": "https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY",
+  "memes_contract": "0x33fd426905f149f8376e227d0c9d3340aad17af1",
+  "access_policy_contract": "0xYOUR_DEPLOYED_ACCESS_POLICY_ADDRESS",
+  "siwe_domain": "sovereignvpn.network",
+  "siwe_uri": "https://sovereignvpn.network",
+  "challenge_ttl": 300000000000,
+  "nonce_length": 16,
+  "credential_ttl": 86400000000000,
+  "rate_limit_per_minute": 30
+}
