@@ -21,7 +21,7 @@ func mock6529API(repByWallet map[string]int64) *httptest.Server {
 		if strings.Contains(path, "/ratings/by-rater") {
 			json.NewEncoder(w).Encode(map[string]any{
 				"data": []map[string]any{
-					{"handle": "supporter1", "tdh": 500000, "rating": 30000, "level": 40, "wallets": []string{"0x111"}},
+					{"handle": "supporter1", "tdh": 65290, "rating": 30000, "level": 40, "wallets": []string{"0x111"}},
 					{"handle": "supporter2", "tdh": 200000, "rating": 20000, "level": 30, "wallets": []string{"0x222"}},
 				},
 			})
@@ -82,7 +82,7 @@ func TestCheckRepEligible(t *testing.T) {
 	c := NewChecker(Config{
 		BaseURL:  api.URL + "/api",
 		Category: "VPN Operator",
-		MinRep:   50000,
+		MinRep:   6529,
 		CacheTTL: time.Minute,
 	})
 
@@ -92,8 +92,9 @@ func TestCheckRepEligible(t *testing.T) {
 	}
 
 	if !result.Eligible {
-		t.Errorf("expected eligible (75000 >= 50000)")
+		t.Errorf("expected eligible (75000 >= 6529)")
 	}
+
 	if result.Rating != 75000 {
 		t.Errorf("expected rating 75000, got %d", result.Rating)
 	}
@@ -101,14 +102,14 @@ func TestCheckRepEligible(t *testing.T) {
 
 func TestCheckRepNotEligible(t *testing.T) {
 	api := mock6529API(map[string]int64{
-		"0xNewbie": 10000, // below 50k threshold
+		"0xNewbie": 1000, // below 6529 threshold
 	})
 	defer api.Close()
 
 	c := NewChecker(Config{
 		BaseURL:  api.URL + "/api",
 		Category: "VPN Operator",
-		MinRep:   50000,
+		MinRep:   6529,
 		CacheTTL: time.Minute,
 	})
 
@@ -118,10 +119,10 @@ func TestCheckRepNotEligible(t *testing.T) {
 	}
 
 	if result.Eligible {
-		t.Errorf("expected not eligible (10000 < 50000)")
+		t.Errorf("expected not eligible (1000 < 6529)")
 	}
-	if result.Rating != 10000 {
-		t.Errorf("expected rating 10000, got %d", result.Rating)
+	if result.Rating != 1000 {
+		t.Errorf("expected rating 1000, got %d", result.Rating)
 	}
 }
 
@@ -132,7 +133,7 @@ func TestCheckRepUnknownWallet(t *testing.T) {
 	c := NewChecker(Config{
 		BaseURL:  api.URL + "/api",
 		Category: "VPN Operator",
-		MinRep:   50000,
+		MinRep:   6529,
 		CacheTTL: time.Minute,
 	})
 
@@ -161,7 +162,7 @@ func TestCheckRepCaching(t *testing.T) {
 	c := NewChecker(Config{
 		BaseURL:  api.URL + "/api",
 		Category: "VPN Operator",
-		MinRep:   50000,
+		MinRep:   6529,
 		CacheTTL: time.Minute,
 	})
 
@@ -194,7 +195,7 @@ func TestCheckRepCacheInvalidation(t *testing.T) {
 	c := NewChecker(Config{
 		BaseURL:  api.URL + "/api",
 		Category: "VPN Operator",
-		MinRep:   50000,
+		MinRep:   6529,
 		CacheTTL: time.Minute,
 	})
 
@@ -244,7 +245,7 @@ func TestGetIdentityUnknown(t *testing.T) {
 }
 
 func TestGetRepBreakdown(t *testing.T) {
-	api := mock6529API(map[string]int64{"0xOp": 50000})
+	api := mock6529API(map[string]int64{"0xOp": 6529})
 	defer api.Close()
 
 	c := NewChecker(Config{

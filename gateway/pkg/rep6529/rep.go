@@ -25,14 +25,14 @@ const (
 	DefaultCategory = "VPN Operator"
 
 	// DefaultMinRep is the minimum rep required to operate a node.
-	DefaultMinRep = 50000
+	DefaultMinRep = 6529
 )
 
 // Config configures the 6529 rep checker.
 type Config struct {
 	BaseURL     string        // API base URL (default: https://api.6529.io/api)
 	Category    string        // Rep category to check (default: "VPN Operator")
-	MinRep      int64         // Minimum rep required (default: 50000)
+	MinRep      int64         // Minimum rep required (default: 6529)
 	CacheTTL    time.Duration // How long to cache rep lookups (default: 5m)
 	HTTPTimeout time.Duration // HTTP request timeout (default: 10s)
 }

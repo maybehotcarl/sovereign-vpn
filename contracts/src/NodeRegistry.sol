@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 /// @title NodeRegistry
 /// @notice On-chain registry for Sovereign VPN node operators.
 ///         Operators stake ETH and register their nodes. Reputation is managed
-///         off-chain via the 6529 community rep system — operators need 50,000
+///         off-chain via the 6529 community rep system — operators need 6,529
 ///         "VPN Operator" rep (given by TDH holders) before the gateway routes
 ///         traffic to them.
 /// @dev The contract handles staking, heartbeat liveness, and slashing.
@@ -100,7 +100,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @notice Register a new VPN node. Must send at least minStake ETH.
     ///         NOTE: Registration is permissionless on-chain. The gateway additionally
-    ///         checks the operator's 6529 "VPN Operator" rep (>= 50,000) before
+    ///         checks the operator's 6529 "VPN Operator" rep (>= 6,529) before
     ///         routing any traffic to this node.
     /// @param endpoint Public WireGuard endpoint (e.g., "1.2.3.4:51820")
     /// @param wgPubKey WireGuard public key (base64)
@@ -270,7 +270,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Get all active nodes (for client node discovery).
-    ///         NOTE: The gateway further filters by 6529 "VPN Operator" rep >= 50,000.
+    ///         NOTE: The gateway further filters by 6529 "VPN Operator" rep >= 6,529.
     function getActiveNodes() external view returns (Node[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < nodeList.length; i++) {

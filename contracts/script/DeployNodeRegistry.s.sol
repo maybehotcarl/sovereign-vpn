@@ -44,7 +44,7 @@ contract DeployNodeRegistry is Script {
         console.log("Next steps:");
         console.log("  1. Register a test node:");
         console.log("     cast send <NodeRegistry> 'registerNode(string,string,string)' 'vpn.example.com:51820' 'wg-pubkey-base64' 'us-east' --value 0.01ether");
-        console.log("  2. Accumulate 50,000 'VPN Operator' rep on 6529:");
+        console.log("  2. Accumulate 6,529 'VPN Operator' rep on 6529:");
         console.log("     https://seize.io/profile/<operator>");
     }
 }
