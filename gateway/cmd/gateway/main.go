@@ -33,6 +33,11 @@ func main() {
 	chainID := flag.Int("chain-id", 11155111, "Ethereum chain ID (1=mainnet, 11155111=sepolia)")
 	siweDomain := flag.String("siwe-domain", "", "SIWE domain (default: 6529vpn.io)")
 
+	// Direct mode (mainnet) — check Memes ERC-1155 directly without AccessPolicy
+	directMode := flag.Bool("direct-mode", false, "Check Memes ERC-1155 directly (no AccessPolicy contract needed)")
+	thisCardID := flag.Int64("this-card-id", 0, "Token ID for THIS card (free tier). 0 = no free tier")
+	maxTokenID := flag.Int64("max-token-id", 350, "Highest Memes token ID to check")
+
 	// WireGuard flags
 	wgInterface := flag.String("wg-interface", "wg0", "WireGuard interface name")
 	wgPubKey := flag.String("wg-pubkey", "", "Server WireGuard public key")
@@ -91,37 +96,84 @@ func main() {
 		cfg.SIWEUri = "https://" + *siweDomain
 	}
 
-	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid config: %v", err)
+	// In direct mode, AccessPolicy is not required
+	if *directMode {
+		if cfg.MemesContract == "" {
+			log.Fatal("--memes-contract is required")
+		}
+		if cfg.EthereumRPC == "" {
+			log.Fatal("--eth-rpc is required")
+		}
+	} else {
+		if err := cfg.Validate(); err != nil {
+			log.Fatalf("Invalid config: %v", err)
+		}
 	}
 
-	// Create NFT checker
-	checker, err := nftcheck.NewChecker(cfg.EthereumRPC, cfg.AccessPolicyContract, 5*time.Minute)
-	if err != nil {
-		log.Fatalf("Failed to create NFT checker: %v", err)
-	}
-	defer checker.Close()
-
-	// Configure delegation if enabled
-	if *enableDelegation {
-		ethClient, err := ethclient.Dial(cfg.EthereumRPC)
-		if err != nil {
-			log.Fatalf("Failed to connect to Ethereum for delegation: %v", err)
+	// Create NFT checker (direct mode or AccessPolicy mode)
+	var checker nftcheck.AccessChecker
+	if *directMode {
+		if cfg.MemesContract == "" {
+			log.Fatal("--memes-contract is required in direct mode")
 		}
-		defer ethClient.Close()
-
-		delChecker, err := delegation.NewChecker(delegation.Config{
-			Client:            ethClient,
-			EnableDelegateXYZ: *enableDelegateXYZ,
-			Enable6529:        *enable6529,
-			MemesContract:     common.HexToAddress(cfg.MemesContract),
-			CacheTTL:          5 * time.Minute,
-		})
+		dc, err := nftcheck.NewDirectChecker(cfg.EthereumRPC, cfg.MemesContract, *thisCardID, *maxTokenID, 5*time.Minute)
 		if err != nil {
-			log.Fatalf("Failed to create delegation checker: %v", err)
+			log.Fatalf("Failed to create direct NFT checker: %v", err)
 		}
-		checker.SetDelegation(delChecker)
-		log.Printf("Delegation enabled (delegate.xyz=%v, 6529=%v)", *enableDelegateXYZ, *enable6529)
+		defer dc.Close()
+		checker = dc
+		log.Printf("Direct mode: checking Memes ERC-1155 at %s (this-card=%d, max-id=%d)", cfg.MemesContract, *thisCardID, *maxTokenID)
+
+		// Configure delegation if enabled
+		if *enableDelegation {
+			ethClient, err := ethclient.Dial(cfg.EthereumRPC)
+			if err != nil {
+				log.Fatalf("Failed to connect to Ethereum for delegation: %v", err)
+			}
+			defer ethClient.Close()
+
+			delChecker, err := delegation.NewChecker(delegation.Config{
+				Client:            ethClient,
+				EnableDelegateXYZ: *enableDelegateXYZ,
+				Enable6529:        *enable6529,
+				MemesContract:     common.HexToAddress(cfg.MemesContract),
+				CacheTTL:          5 * time.Minute,
+			})
+			if err != nil {
+				log.Fatalf("Failed to create delegation checker: %v", err)
+			}
+			dc.SetDelegation(delChecker)
+			log.Printf("Delegation enabled (delegate.xyz=%v, 6529=%v)", *enableDelegateXYZ, *enable6529)
+		}
+	} else {
+		ac, err := nftcheck.NewChecker(cfg.EthereumRPC, cfg.AccessPolicyContract, 5*time.Minute)
+		if err != nil {
+			log.Fatalf("Failed to create NFT checker: %v", err)
+		}
+		defer ac.Close()
+		checker = ac
+
+		// Configure delegation if enabled
+		if *enableDelegation {
+			ethClient, err := ethclient.Dial(cfg.EthereumRPC)
+			if err != nil {
+				log.Fatalf("Failed to connect to Ethereum for delegation: %v", err)
+			}
+			defer ethClient.Close()
+
+			delChecker, err := delegation.NewChecker(delegation.Config{
+				Client:            ethClient,
+				EnableDelegateXYZ: *enableDelegateXYZ,
+				Enable6529:        *enable6529,
+				MemesContract:     common.HexToAddress(cfg.MemesContract),
+				CacheTTL:          5 * time.Minute,
+			})
+			if err != nil {
+				log.Fatalf("Failed to create delegation checker: %v", err)
+			}
+			ac.SetDelegation(delChecker)
+			log.Printf("Delegation enabled (delegate.xyz=%v, 6529=%v)", *enableDelegateXYZ, *enable6529)
+		}
 	}
 
 	// Create WireGuard manager

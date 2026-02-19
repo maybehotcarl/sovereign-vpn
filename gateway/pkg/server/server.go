@@ -20,7 +20,7 @@ import (
 type Server struct {
 	cfg      *config.Config
 	siwe     *siwe.Service
-	checker  *nftcheck.Checker
+	checker  nftcheck.AccessChecker
 	gate     *nftgate.Gate
 	wg       *wireguard.Manager
 	registry *noderegistry.Registry
@@ -29,7 +29,7 @@ type Server struct {
 }
 
 // New creates a new gateway server.
-func New(cfg *config.Config, checker *nftcheck.Checker, wg *wireguard.Manager) *Server {
+func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manager) *Server {
 	gate := nftgate.NewGate(checker, cfg.CredentialTTL)
 
 	s := &Server{

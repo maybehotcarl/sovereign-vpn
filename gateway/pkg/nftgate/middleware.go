@@ -31,13 +31,13 @@ type Session struct {
 
 // Gate holds the NFT verification state and session store.
 type Gate struct {
-	checker    *nftcheck.Checker
+	checker    nftcheck.AccessChecker
 	credTTL    time.Duration
 	sessions   *SessionStore
 }
 
 // NewGate creates a new NFT gate.
-func NewGate(checker *nftcheck.Checker, credentialTTL time.Duration) *Gate {
+func NewGate(checker nftcheck.AccessChecker, credentialTTL time.Duration) *Gate {
 	return &Gate{
 		checker:  checker,
 		credTTL:  credentialTTL,
