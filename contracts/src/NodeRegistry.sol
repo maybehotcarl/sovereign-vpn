@@ -6,10 +6,13 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title NodeRegistry
 /// @notice On-chain registry for Sovereign VPN node operators.
-///         Operators stake ETH to register, earn reputation from uptime,
-///         and can be slashed for misbehavior.
-/// @dev Reputation is tracked as an integer score. Slashing burns staked ETH
-///      and reduces reputation. A governance multisig (owner) manages disputes.
+///         Operators stake ETH and register their nodes. Reputation is managed
+///         off-chain via the 6529 community rep system — operators need 50,000
+///         "VPN Operator" rep (given by TDH holders) before the gateway routes
+///         traffic to them.
+/// @dev The contract handles staking, heartbeat liveness, and slashing.
+///      Reputation lives in the 6529 ecosystem at api.6529.io, not on-chain.
+///      The gateway checks rep via GET /profiles/{wallet}/rep/rating?category=VPN+Operator
 contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     // =========================================================================
@@ -22,7 +25,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         string  wgPubKey;         // WireGuard public key (base64)
         string  region;           // geographic region (e.g., "us-east", "eu-west")
         uint256 stakedAmount;     // ETH staked (in wei)
-        uint256 reputation;       // reputation score (starts at 100)
         uint256 registeredAt;     // block.timestamp when registered
         uint256 lastHeartbeat;    // last time node sent a liveness proof
         bool    active;           // whether the node is accepting connections
@@ -35,12 +37,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @notice Minimum ETH stake required to register a node.
     uint256 public minStake;
-
-    /// @notice Starting reputation score for new nodes.
-    uint256 public constant INITIAL_REPUTATION = 100;
-
-    /// @notice Maximum reputation score.
-    uint256 public constant MAX_REPUTATION = 1000;
 
     /// @notice Heartbeat interval: nodes must check in within this period.
     uint256 public heartbeatInterval;
@@ -66,7 +62,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     event NodeReactivated(address indexed operator);
     event NodeUnregistered(address indexed operator, uint256 stakeReturned);
     event Heartbeat(address indexed operator, uint256 timestamp);
-    event ReputationUpdated(address indexed operator, uint256 oldRep, uint256 newRep, string reason);
     event NodeSlashed(address indexed operator, uint256 slashAmount, uint256 newStake, string reason);
     event StakeAdded(address indexed operator, uint256 amount, uint256 newTotal);
     event EndpointUpdated(address indexed operator, string newEndpoint);
@@ -81,7 +76,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     error InsufficientStake(uint256 sent, uint256 required);
     error AlreadyRegistered();
     error NotRegistered();
-    error NotNodeOperator();
     error NodeNotActive();
     error NodeAlreadyActive();
     error NodeSlashedCannotReactivate();
@@ -105,6 +99,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     // =========================================================================
 
     /// @notice Register a new VPN node. Must send at least minStake ETH.
+    ///         NOTE: Registration is permissionless on-chain. The gateway additionally
+    ///         checks the operator's 6529 "VPN Operator" rep (>= 50,000) before
+    ///         routing any traffic to this node.
     /// @param endpoint Public WireGuard endpoint (e.g., "1.2.3.4:51820")
     /// @param wgPubKey WireGuard public key (base64)
     /// @param region Geographic region identifier
@@ -124,7 +121,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
             wgPubKey: wgPubKey,
             region: region,
             stakedAmount: msg.value,
-            reputation: INITIAL_REPUTATION,
             registeredAt: block.timestamp,
             lastHeartbeat: block.timestamp,
             active: true,
@@ -163,7 +159,6 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Unregister and withdraw remaining stake.
-    ///         Cannot unregister if slashed (slashed stake is forfeit).
     function unregister() external nonReentrant {
         if (!isRegistered[msg.sender]) revert NotRegistered();
 
@@ -202,15 +197,15 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     //                          GOVERNANCE / ADMIN FUNCTIONS
     // =========================================================================
 
-    /// @notice Slash a node's stake and reputation. Called by governance for misbehavior.
+    /// @notice Slash a node's stake. Called by governance for misbehavior.
+    ///         Reputation penalties happen in the 6529 rep system (community members
+    ///         can reduce their "VPN Operator" rep for this operator on seize.io).
     /// @param operator The node operator to slash
     /// @param slashPercent Percentage of stake to slash (1-100)
-    /// @param repPenalty Reputation points to deduct
     /// @param reason Human-readable reason for the slash
     function slash(
         address operator,
         uint256 slashPercent,
-        uint256 repPenalty,
         string calldata reason
     ) external onlyOwner {
         if (!isRegistered[operator]) revert NotRegistered();
@@ -223,41 +218,10 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         node.stakedAmount -= slashAmount;
         slashedFunds += slashAmount;
 
-        // Reduce reputation
-        uint256 oldRep = node.reputation;
-        if (repPenalty >= node.reputation) {
-            node.reputation = 0;
-        } else {
-            node.reputation -= repPenalty;
-        }
-
         node.slashed = true;
         node.active = false;
 
         emit NodeSlashed(operator, slashAmount, node.stakedAmount, reason);
-        emit ReputationUpdated(operator, oldRep, node.reputation, reason);
-    }
-
-    /// @notice Increase a node's reputation (for good behavior, uptime rewards).
-    /// @param operator The node operator to reward
-    /// @param amount Reputation points to add
-    /// @param reason Human-readable reason
-    function increaseReputation(
-        address operator,
-        uint256 amount,
-        string calldata reason
-    ) external onlyOwner {
-        if (!isRegistered[operator]) revert NotRegistered();
-
-        Node storage node = nodes[operator];
-        uint256 oldRep = node.reputation;
-
-        node.reputation += amount;
-        if (node.reputation > MAX_REPUTATION) {
-            node.reputation = MAX_REPUTATION;
-        }
-
-        emit ReputationUpdated(operator, oldRep, node.reputation, reason);
     }
 
     /// @notice Withdraw slashed funds to a DAO treasury address.
@@ -306,6 +270,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Get all active nodes (for client node discovery).
+    ///         NOTE: The gateway further filters by 6529 "VPN Operator" rep >= 50,000.
     function getActiveNodes() external view returns (Node[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < nodeList.length; i++) {

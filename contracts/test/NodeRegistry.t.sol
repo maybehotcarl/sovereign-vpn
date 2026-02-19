@@ -39,7 +39,6 @@ contract NodeRegistryTest is Test {
         NodeRegistry.Node memory node = registry.getNode(operator1);
         assertEq(node.operator, operator1);
         assertEq(node.stakedAmount, 0.05 ether);
-        assertEq(node.reputation, 100);
         assertTrue(node.active);
         assertFalse(node.slashed);
         assertEq(keccak256(bytes(node.endpoint)), keccak256(bytes("1.2.3.4:51820")));
@@ -164,7 +163,7 @@ contract NodeRegistryTest is Test {
         registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
 
         // Slash the node (from owner)
-        registry.slash(operator1, 50, 50, "misbehavior");
+        registry.slash(operator1, 50, "misbehavior");
 
         vm.prank(operator1);
         vm.expectRevert(NodeRegistry.NodeSlashedCannotReactivate.selector);
@@ -275,34 +274,31 @@ contract NodeRegistryTest is Test {
     }
 
     // =========================================================================
-    //                          SLASHING
+    //                          SLASHING (stake only — rep is off-chain via 6529)
     // =========================================================================
 
     function test_Slash() public {
         vm.prank(operator1);
         registry.register{value: 1 ether}("1.2.3.4:51820", "key==", "us-east");
 
-        // Slash 50% stake, -30 reputation
-        registry.slash(operator1, 50, 30, "poor uptime");
+        // Slash 50% stake
+        registry.slash(operator1, 50, "poor uptime");
 
         NodeRegistry.Node memory node = registry.getNode(operator1);
         assertEq(node.stakedAmount, 0.5 ether);
-        assertEq(node.reputation, 70); // 100 - 30
         assertTrue(node.slashed);
         assertFalse(node.active);
         assertEq(registry.slashedFunds(), 0.5 ether);
     }
 
-    function test_SlashEntireReputation() public {
+    function test_SlashEntireStake() public {
         vm.prank(operator1);
         registry.register{value: 1 ether}("1.2.3.4:51820", "key==", "us-east");
 
-        // Slash with penalty larger than current reputation
-        registry.slash(operator1, 100, 200, "severe violation");
+        registry.slash(operator1, 100, "severe violation");
 
         NodeRegistry.Node memory node = registry.getNode(operator1);
         assertEq(node.stakedAmount, 0);
-        assertEq(node.reputation, 0); // clamped at 0, not underflow
         assertEq(registry.slashedFunds(), 1 ether);
     }
 
@@ -312,45 +308,12 @@ contract NodeRegistryTest is Test {
 
         vm.prank(randomUser);
         vm.expectRevert();
-        registry.slash(operator1, 50, 30, "trying to slash without authority");
+        registry.slash(operator1, 50, "unauthorized");
     }
 
     function test_SlashRevertsNotRegistered() public {
         vm.expectRevert(NodeRegistry.NotRegistered.selector);
-        registry.slash(randomUser, 50, 30, "not a node");
-    }
-
-    // =========================================================================
-    //                          REPUTATION
-    // =========================================================================
-
-    function test_IncreaseReputation() public {
-        vm.prank(operator1);
-        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
-
-        registry.increaseReputation(operator1, 50, "good uptime");
-
-        NodeRegistry.Node memory node = registry.getNode(operator1);
-        assertEq(node.reputation, 150); // 100 + 50
-    }
-
-    function test_ReputationCapsAtMax() public {
-        vm.prank(operator1);
-        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
-
-        registry.increaseReputation(operator1, 2000, "exceptional service");
-
-        NodeRegistry.Node memory node = registry.getNode(operator1);
-        assertEq(node.reputation, 1000); // capped at MAX_REPUTATION
-    }
-
-    function test_IncreaseReputationRevertsNotOwner() public {
-        vm.prank(operator1);
-        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
-
-        vm.prank(randomUser);
-        vm.expectRevert();
-        registry.increaseReputation(operator1, 50, "unauthorized");
+        registry.slash(randomUser, 50, "not a node");
     }
 
     // =========================================================================
@@ -361,7 +324,7 @@ contract NodeRegistryTest is Test {
         vm.prank(operator1);
         registry.register{value: 1 ether}("1.2.3.4:51820", "key==", "us-east");
 
-        registry.slash(operator1, 50, 0, "misbehavior");
+        registry.slash(operator1, 50, "misbehavior");
 
         address treasury = address(0xDAD);
         uint256 balBefore = treasury.balance;
@@ -507,6 +470,6 @@ contract NodeRegistryTest is Test {
 
         vm.expectEmit(true, false, false, true);
         emit NodeRegistry.NodeSlashed(operator1, 0.5 ether, 0.5 ether, "test slash");
-        registry.slash(operator1, 50, 0, "test slash");
+        registry.slash(operator1, 50, "test slash");
     }
 }

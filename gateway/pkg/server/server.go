@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
@@ -22,6 +24,7 @@ type Server struct {
 	gate     *nftgate.Gate
 	wg       *wireguard.Manager
 	registry *noderegistry.Registry
+	rep      *rep6529.Checker
 	mux      *http.ServeMux
 }
 
@@ -63,6 +66,11 @@ func (s *Server) SetChainID(chainID int) {
 // SetRegistry configures the node registry for node discovery endpoints.
 func (s *Server) SetRegistry(r *noderegistry.Registry) {
 	s.registry = r
+}
+
+// SetRepChecker configures the 6529 rep checker for node eligibility.
+func (s *Server) SetRepChecker(r *rep6529.Checker) {
+	s.rep = r
 }
 
 // Handler returns the HTTP handler.
@@ -307,15 +315,17 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 
 // NodeResponse is a public-facing node representation.
 type NodeResponse struct {
-	Operator   string `json:"operator"`
-	Endpoint   string `json:"endpoint"`
-	WgPubKey   string `json:"wg_pub_key"`
-	Region     string `json:"region"`
-	Reputation uint64 `json:"reputation"`
-	Active     bool   `json:"active"`
+	Operator    string `json:"operator"`
+	Endpoint    string `json:"endpoint"`
+	WgPubKey    string `json:"wg_pub_key"`
+	Region      string `json:"region"`
+	Rep         int64  `json:"rep"`          // 6529 "VPN Operator" rep
+	RepEligible bool   `json:"rep_eligible"` // whether rep >= required minimum
+	Active      bool   `json:"active"`
 }
 
 // GET /nodes — list all active VPN nodes from the on-chain registry.
+// Only returns nodes with sufficient 6529 "VPN Operator" rep.
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if s.registry == nil {
 		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
@@ -329,21 +339,13 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]NodeResponse, len(nodes))
-	for i, n := range nodes {
-		resp[i] = NodeResponse{
-			Operator:   n.Operator.Hex(),
-			Endpoint:   n.Endpoint,
-			WgPubKey:   n.WgPubKey,
-			Region:     n.Region,
-			Reputation: n.Reputation,
-			Active:     n.Active,
-		}
-	}
+	resp := s.enrichNodesWithRep(r.Context(), nodes)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes": resp,
-		"count": len(resp),
+		"nodes":        resp,
+		"count":        len(resp),
+		"min_rep":      s.getMinRep(),
+		"rep_category": s.getRepCategory(),
 	})
 }
 
@@ -367,23 +369,66 @@ func (s *Server) handleListNodesByRegion(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := make([]NodeResponse, len(nodes))
-	for i, n := range nodes {
-		resp[i] = NodeResponse{
-			Operator:   n.Operator.Hex(),
-			Endpoint:   n.Endpoint,
-			WgPubKey:   n.WgPubKey,
-			Region:     n.Region,
-			Reputation: n.Reputation,
-			Active:     n.Active,
-		}
-	}
+	resp := s.enrichNodesWithRep(r.Context(), nodes)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":  resp,
-		"count":  len(resp),
-		"region": region,
+		"nodes":        resp,
+		"count":        len(resp),
+		"region":       region,
+		"min_rep":      s.getMinRep(),
+		"rep_category": s.getRepCategory(),
 	})
+}
+
+// enrichNodesWithRep checks 6529 rep for each node and filters to eligible nodes only.
+func (s *Server) enrichNodesWithRep(ctx context.Context, nodes []noderegistry.Node) []NodeResponse {
+	var eligible []NodeResponse
+	for _, n := range nodes {
+		nr := NodeResponse{
+			Operator: n.Operator.Hex(),
+			Endpoint: n.Endpoint,
+			WgPubKey: n.WgPubKey,
+			Region:   n.Region,
+			Active:   n.Active,
+		}
+
+		// Check 6529 rep if checker is configured
+		if s.rep != nil {
+			result, err := s.rep.CheckRep(ctx, n.Operator.Hex())
+			if err != nil {
+				log.Printf("Error checking 6529 rep for %s: %v", n.Operator.Hex(), err)
+				// Include but mark as not eligible if check fails
+				nr.Rep = 0
+				nr.RepEligible = false
+			} else {
+				nr.Rep = result.Rating
+				nr.RepEligible = result.Eligible
+			}
+		} else {
+			// No rep checker configured — show all nodes without rep filtering
+			nr.RepEligible = true
+		}
+
+		// Only include rep-eligible nodes in the response
+		if nr.RepEligible {
+			eligible = append(eligible, nr)
+		}
+	}
+	return eligible
+}
+
+func (s *Server) getMinRep() int64 {
+	if s.rep != nil {
+		return s.rep.MinRepRequired()
+	}
+	return 0
+}
+
+func (s *Server) getRepCategory() string {
+	if s.rep != nil {
+		return s.rep.Category()
+	}
+	return ""
 }
 
 // =========================================================================

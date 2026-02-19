@@ -185,12 +185,13 @@ type NodesResponse struct {
 
 // NodeInfo represents a VPN node from the registry.
 type NodeInfo struct {
-	Operator   string `json:"operator"`
-	Endpoint   string `json:"endpoint"`
-	WgPubKey   string `json:"wg_pub_key"`
-	Region     string `json:"region"`
-	Reputation uint64 `json:"reputation"`
-	Active     bool   `json:"active"`
+	Operator    string `json:"operator"`
+	Endpoint    string `json:"endpoint"`
+	WgPubKey    string `json:"wg_pub_key"`
+	Region      string `json:"region"`
+	Rep         int64  `json:"rep"`
+	RepEligible bool   `json:"rep_eligible"`
+	Active      bool   `json:"active"`
 }
 
 // ListNodes fetches all active VPN nodes from the gateway.

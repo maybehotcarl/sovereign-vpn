@@ -1,6 +1,6 @@
 // Package noderegistry provides a Go client for the on-chain NodeRegistry contract.
-// It enables the gateway and CLI to discover active VPN nodes, check their
-// reputation, and operators to manage their nodes.
+// It enables the gateway and CLI to discover active VPN nodes.
+// Reputation is checked separately via the 6529 API (rep6529 package).
 package noderegistry
 
 import (
@@ -18,13 +18,13 @@ import (
 )
 
 // Node represents a registered VPN node from the on-chain registry.
+// Reputation is managed off-chain via the 6529 community rep system.
 type Node struct {
 	Operator      common.Address
 	Endpoint      string
 	WgPubKey      string
 	Region        string
 	StakedAmount  *big.Int
-	Reputation    uint64
 	RegisteredAt  time.Time
 	LastHeartbeat time.Time
 	Active        bool
@@ -43,6 +43,7 @@ type Registry struct {
 	cacheTime  time.Time
 }
 
+// ABI for the updated NodeRegistry (no reputation field in Node struct).
 const nodeRegistryABIJSON = `[
 	{
 		"inputs": [],
@@ -54,7 +55,6 @@ const nodeRegistryABIJSON = `[
 				{"name": "wgPubKey", "type": "string"},
 				{"name": "region", "type": "string"},
 				{"name": "stakedAmount", "type": "uint256"},
-				{"name": "reputation", "type": "uint256"},
 				{"name": "registeredAt", "type": "uint256"},
 				{"name": "lastHeartbeat", "type": "uint256"},
 				{"name": "active", "type": "bool"},
@@ -76,7 +76,6 @@ const nodeRegistryABIJSON = `[
 				{"name": "wgPubKey", "type": "string"},
 				{"name": "region", "type": "string"},
 				{"name": "stakedAmount", "type": "uint256"},
-				{"name": "reputation", "type": "uint256"},
 				{"name": "registeredAt", "type": "uint256"},
 				{"name": "lastHeartbeat", "type": "uint256"},
 				{"name": "active", "type": "bool"},
@@ -112,7 +111,6 @@ const nodeRegistryABIJSON = `[
 				{"name": "wgPubKey", "type": "string"},
 				{"name": "region", "type": "string"},
 				{"name": "stakedAmount", "type": "uint256"},
-				{"name": "reputation", "type": "uint256"},
 				{"name": "registeredAt", "type": "uint256"},
 				{"name": "lastHeartbeat", "type": "uint256"},
 				{"name": "active", "type": "bool"},
@@ -317,7 +315,6 @@ func (r *Registry) decodeNodeArray(method string, output []byte) ([]Node, error)
 		WgPubKey      string         `json:"wgPubKey"`
 		Region        string         `json:"region"`
 		StakedAmount  *big.Int       `json:"stakedAmount"`
-		Reputation    *big.Int       `json:"reputation"`
 		RegisteredAt  *big.Int       `json:"registeredAt"`
 		LastHeartbeat *big.Int       `json:"lastHeartbeat"`
 		Active        bool           `json:"active"`
@@ -335,7 +332,6 @@ func (r *Registry) decodeNodeArray(method string, output []byte) ([]Node, error)
 			WgPubKey:      raw.WgPubKey,
 			Region:        raw.Region,
 			StakedAmount:  raw.StakedAmount,
-			Reputation:    raw.Reputation.Uint64(),
 			RegisteredAt:  time.Unix(raw.RegisteredAt.Int64(), 0),
 			LastHeartbeat: time.Unix(raw.LastHeartbeat.Int64(), 0),
 			Active:        raw.Active,
@@ -353,7 +349,6 @@ func decodeNodeStruct(raw interface{}) (*Node, error) {
 		WgPubKey      string         `json:"wgPubKey"`
 		Region        string         `json:"region"`
 		StakedAmount  *big.Int       `json:"stakedAmount"`
-		Reputation    *big.Int       `json:"reputation"`
 		RegisteredAt  *big.Int       `json:"registeredAt"`
 		LastHeartbeat *big.Int       `json:"lastHeartbeat"`
 		Active        bool           `json:"active"`
@@ -369,7 +364,6 @@ func decodeNodeStruct(raw interface{}) (*Node, error) {
 		WgPubKey:      s.WgPubKey,
 		Region:        s.Region,
 		StakedAmount:  s.StakedAmount,
-		Reputation:    s.Reputation.Uint64(),
 		RegisteredAt:  time.Unix(s.RegisteredAt.Int64(), 0),
 		LastHeartbeat: time.Unix(s.LastHeartbeat.Int64(), 0),
 		Active:        s.Active,
