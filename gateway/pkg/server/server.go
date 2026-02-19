@@ -9,18 +9,20 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
 
 // Server is the Sovereign VPN gateway.
 type Server struct {
-	cfg     *config.Config
-	siwe    *siwe.Service
-	checker *nftcheck.Checker
-	gate    *nftgate.Gate
-	wg      *wireguard.Manager
-	mux     *http.ServeMux
+	cfg      *config.Config
+	siwe     *siwe.Service
+	checker  *nftcheck.Checker
+	gate     *nftgate.Gate
+	wg       *wireguard.Manager
+	registry *noderegistry.Registry
+	mux      *http.ServeMux
 }
 
 // New creates a new gateway server.
@@ -46,12 +48,21 @@ func New(cfg *config.Config, checker *nftcheck.Checker, wg *wireguard.Manager) *
 	s.mux.HandleFunc("POST /vpn/disconnect", s.handleVPNDisconnect)
 	s.mux.HandleFunc("GET /vpn/status", s.handleVPNStatus)
 
+	// Node discovery endpoint (public)
+	s.mux.HandleFunc("GET /nodes", s.handleListNodes)
+	s.mux.HandleFunc("GET /nodes/region", s.handleListNodesByRegion)
+
 	return s
 }
 
 // SetChainID sets the expected chain ID for SIWE verification.
 func (s *Server) SetChainID(chainID int) {
 	s.siwe.SetChainID(chainID)
+}
+
+// SetRegistry configures the node registry for node discovery endpoints.
+func (s *Server) SetRegistry(r *noderegistry.Registry) {
+	s.registry = r
 }
 
 // Handler returns the HTTP handler.
@@ -287,6 +298,91 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 		"connected":  true,
 		"tier":       session.Tier.String(),
 		"expires_at": session.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// =========================================================================
+//                          NODE DISCOVERY HANDLERS
+// =========================================================================
+
+// NodeResponse is a public-facing node representation.
+type NodeResponse struct {
+	Operator   string `json:"operator"`
+	Endpoint   string `json:"endpoint"`
+	WgPubKey   string `json:"wg_pub_key"`
+	Region     string `json:"region"`
+	Reputation uint64 `json:"reputation"`
+	Active     bool   `json:"active"`
+}
+
+// GET /nodes — list all active VPN nodes from the on-chain registry.
+func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
+	if s.registry == nil {
+		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
+		return
+	}
+
+	nodes, err := s.registry.GetActiveNodes(r.Context())
+	if err != nil {
+		log.Printf("Error fetching active nodes: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to fetch nodes")
+		return
+	}
+
+	resp := make([]NodeResponse, len(nodes))
+	for i, n := range nodes {
+		resp[i] = NodeResponse{
+			Operator:   n.Operator.Hex(),
+			Endpoint:   n.Endpoint,
+			WgPubKey:   n.WgPubKey,
+			Region:     n.Region,
+			Reputation: n.Reputation,
+			Active:     n.Active,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": resp,
+		"count": len(resp),
+	})
+}
+
+// GET /nodes/region?region=us-east — list active nodes in a region.
+func (s *Server) handleListNodesByRegion(w http.ResponseWriter, r *http.Request) {
+	if s.registry == nil {
+		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
+		return
+	}
+
+	region := r.URL.Query().Get("region")
+	if region == "" {
+		writeError(w, http.StatusBadRequest, "region query param required")
+		return
+	}
+
+	nodes, err := s.registry.GetActiveNodesByRegion(r.Context(), region)
+	if err != nil {
+		log.Printf("Error fetching nodes for region %s: %v", region, err)
+		writeError(w, http.StatusInternalServerError, "failed to fetch nodes")
+		return
+	}
+
+	resp := make([]NodeResponse, len(nodes))
+	for i, n := range nodes {
+		resp[i] = NodeResponse{
+			Operator:   n.Operator.Hex(),
+			Endpoint:   n.Endpoint,
+			WgPubKey:   n.WgPubKey,
+			Region:     n.Region,
+			Reputation: n.Reputation,
+			Active:     n.Active,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes":  resp,
+		"count":  len(resp),
+		"region": region,
 	})
 }
 

@@ -21,18 +21,28 @@ Sovereign VPN is a decentralized VPN where:
 
 | Component | Status | Tests |
 |-----------|--------|-------|
-| Smart Contracts (AccessPolicy, TestMemes) | Built | 38 passing |
+| Smart Contracts (AccessPolicy, TestMemes) | Deployed (Sepolia) | 38 passing |
+| NodeRegistry (staking, reputation, slashing) | Built | 38 passing |
+| SessionManager (payments, revenue split) | Built | 28 passing |
 | SIWE Authentication Gateway | Built | 9 passing |
 | NFT Gate Middleware + Sessions | Built | 11 passing |
 | WireGuard Peer Manager | Built | 11 passing |
 | Delegation Support (delegate.xyz + 6529) | Built | 5 passing |
 | Transfer Event Revocation | Built | 5 passing |
+| Node Registry Go Client + Discovery API | Built | - |
 | CLI Client (`svpn`) | Built | 19 passing |
-| End-to-End Integration Tests | Built | 7 passing |
+| End-to-End Integration Tests (mock + Sepolia) | Built | 9 passing |
 | GitHub Actions CI | Configured | - |
 | Docker Support | Configured | - |
 
-**Total: 105 tests across Solidity + Go**
+**Total: 173 tests across Solidity + Go**
+
+### Sepolia Testnet Contracts
+
+| Contract | Address |
+|----------|---------|
+| TestMemes (ERC-1155) | `0x98C361b7C385b9589E60B36B880501D66123B294` |
+| AccessPolicy | `0xF1AfCFD8eF6a869987D50e173e22F6fc99431712` |
 
 ## Architecture
 
@@ -122,8 +132,10 @@ sovereign-vpn/
 ├── contracts/          # Solidity (Foundry)
 │   ├── src/
 │   │   ├── AccessPolicy.sol    # NFT ownership → VPN access tiers
+│   │   ├── NodeRegistry.sol    # Node staking, reputation, slashing
+│   │   ├── SessionManager.sol  # Payment routing + revenue split
 │   │   └── TestMemes.sol       # Test ERC-1155 for Sepolia
-│   └── test/                   # 38 Foundry tests
+│   └── test/                   # 104 Foundry tests
 ├── gateway/            # Go gateway server
 │   ├── cmd/gateway/            # Entry point with graceful shutdown
 │   ├── pkg/
@@ -134,16 +146,17 @@ sovereign-vpn/
 │   │   ├── wireguard/          # Peer lifecycle + IP pool
 │   │   ├── delegation/         # delegate.xyz v2 + 6529 registry
 │   │   ├── revocation/         # ERC-1155 transfer event watcher
-│   │   └── server/             # HTTP handlers + revoker
+│   │   ├── noderegistry/       # On-chain node registry client + heartbeat
+│   │   └── server/             # HTTP handlers + node discovery API
 │   └── Dockerfile
 ├── client/             # Go CLI client
-│   ├── cmd/svpn/               # CLI entry point
+│   ├── cmd/svpn/               # CLI: connect, nodes, status, keygen, health
 │   ├── pkg/
-│   │   ├── api/                # Gateway HTTP client
+│   │   ├── api/                # Gateway HTTP client (auth + VPN + nodes)
 │   │   ├── wallet/             # Ethereum key management + ERC-191 signing
 │   │   └── wgconf/             # WireGuard config generation
 │   └── Dockerfile
-├── integration/        # End-to-end tests with mock Ethereum RPC
+├── integration/        # End-to-end tests (mock + Sepolia live)
 ├── deploy/             # VPS setup scripts
 ├── research/           # Sentinel handshake analysis
 └── .github/workflows/  # CI pipeline

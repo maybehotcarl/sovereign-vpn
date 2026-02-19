@@ -38,6 +38,8 @@ func main() {
 		cmdKeygen(os.Args[2:])
 	case "health":
 		cmdHealth(os.Args[2:])
+	case "nodes":
+		cmdNodes(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -57,6 +59,7 @@ Commands:
   connect      Authenticate and connect to VPN
   disconnect   Disconnect from VPN
   status       Check VPN connection status
+  nodes        List available VPN nodes
   keygen       Generate a new Ethereum wallet
   health       Check gateway health
 
@@ -245,5 +248,39 @@ func cmdHealth(args []string) {
 	fmt.Println("Gateway health:")
 	for k, v := range health {
 		fmt.Printf("  %s: %v\n", k, v)
+	}
+}
+
+func cmdNodes(args []string) {
+	fs := flag.NewFlagSet("nodes", flag.ExitOnError)
+	gateway := fs.String("gateway", "http://localhost:8080", "Gateway URL")
+	region := fs.String("region", "", "Filter by region (e.g., us-east)")
+	fs.Parse(args)
+
+	client := api.NewClient(*gateway)
+
+	var resp *api.NodesResponse
+	var err error
+	if *region != "" {
+		resp, err = client.ListNodesByRegion(*region)
+	} else {
+		resp, err = client.ListNodes()
+	}
+	if err != nil {
+		log.Fatalf("Failed to list nodes: %v", err)
+	}
+
+	if resp.Count == 0 {
+		fmt.Println("No active nodes found.")
+		return
+	}
+
+	fmt.Printf("Active nodes: %d\n\n", resp.Count)
+	for i, n := range resp.Nodes {
+		fmt.Printf("  [%d] %s\n", i+1, n.Endpoint)
+		fmt.Printf("      Region:     %s\n", n.Region)
+		fmt.Printf("      Reputation: %d\n", n.Reputation)
+		fmt.Printf("      Operator:   %s\n", n.Operator)
+		fmt.Println()
 	}
 }

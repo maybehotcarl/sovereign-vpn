@@ -177,6 +177,60 @@ func (c *Client) Health() (map[string]any, error) {
 	return result, nil
 }
 
+// NodesResponse is returned by GET /nodes.
+type NodesResponse struct {
+	Nodes []NodeInfo `json:"nodes"`
+	Count int        `json:"count"`
+}
+
+// NodeInfo represents a VPN node from the registry.
+type NodeInfo struct {
+	Operator   string `json:"operator"`
+	Endpoint   string `json:"endpoint"`
+	WgPubKey   string `json:"wg_pub_key"`
+	Region     string `json:"region"`
+	Reputation uint64 `json:"reputation"`
+	Active     bool   `json:"active"`
+}
+
+// ListNodes fetches all active VPN nodes from the gateway.
+func (c *Client) ListNodes() (*NodesResponse, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/nodes")
+	if err != nil {
+		return nil, fmt.Errorf("nodes request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	var result NodesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding nodes response: %w", err)
+	}
+	return &result, nil
+}
+
+// ListNodesByRegion fetches active VPN nodes in a specific region.
+func (c *Client) ListNodesByRegion(region string) (*NodesResponse, error) {
+	resp, err := c.httpClient.Get(c.baseURL + "/nodes/region?region=" + region)
+	if err != nil {
+		return nil, fmt.Errorf("nodes request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	var result NodesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding nodes response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *Client) post(path string, body []byte) (*http.Response, error) {
 	resp, err := c.httpClient.Post(
 		c.baseURL+path,
