@@ -31,6 +31,7 @@ func main() {
 	policyContract := flag.String("policy-contract", "", "AccessPolicy contract address")
 	memesContract := flag.String("memes-contract", "", "Memes ERC-1155 contract address")
 	chainID := flag.Int("chain-id", 11155111, "Ethereum chain ID (1=mainnet, 11155111=sepolia)")
+	siweDomain := flag.String("siwe-domain", "", "SIWE domain (default: 6529vpn.io)")
 
 	// WireGuard flags
 	wgInterface := flag.String("wg-interface", "wg0", "WireGuard interface name")
@@ -84,6 +85,10 @@ func main() {
 	}
 	if *memesContract != "" {
 		cfg.MemesContract = *memesContract
+	}
+	if *siweDomain != "" {
+		cfg.SIWEDomain = *siweDomain
+		cfg.SIWEUri = "https://" + *siweDomain
 	}
 
 	if err := cfg.Validate(); err != nil {
