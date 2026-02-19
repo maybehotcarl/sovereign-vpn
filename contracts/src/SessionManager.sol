@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 /// @title SessionManager
 /// @notice On-chain VPN session tracking and payment routing.
 ///         Users pay per-session (paid tier), and payments are split between
-///         the node operator and the DAO treasury.
+///         the node operator and the community treasury.
 /// @dev Free-tier users (holding THIS card) skip payment. Paid-tier users
 ///      send ETH when opening a session; it's split on session close.
 ///      Designed to be token-agnostic for future $6529 token support.
@@ -43,7 +43,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     /// @notice Operator revenue share (basis points, e.g., 8000 = 80%).
     uint256 public operatorShareBps;
 
-    /// @notice DAO treasury address.
+    /// @notice Community treasury address.
     address public treasury;
 
     /// @notice Session price per hour (in wei). 0 = free for all.
@@ -94,7 +94,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     //                          CONSTRUCTOR
     // =========================================================================
 
-    /// @param _treasury DAO treasury address
+    /// @param _treasury Community treasury address
     /// @param _operatorShareBps Operator revenue share in basis points (e.g., 8000 = 80%)
     /// @param _pricePerHour Session price per hour in wei
     /// @param _maxSessionDuration Maximum session duration in seconds

@@ -1,6 +1,6 @@
 # Sovereign VPN: Technical Specification
 
-### An NFT-Gated, Reputation-Based, DAO-Governed Decentralized VPN Network
+### An NFT-Gated, Reputation-Based, Community-Governed Decentralized VPN Network
 
 **Version:** 0.2 (Draft)
 **Date:** 2026-02-18
@@ -16,7 +16,7 @@
 4. [Layer 1: Network Transport (Sentinel dVPN Fork)](#4-layer-1-network-transport)
 5. [Layer 2: NFT-Gated Access Control](#5-layer-2-nft-gated-access-control)
 6. [Layer 3: On-Chain Reputation System](#6-layer-3-on-chain-reputation-system)
-7. [Layer 4: DAO Governance](#7-layer-4-dao-governance)
+7. [Layer 4: Community Governance](#7-layer-4-dao-governance)
 8. [Smart Contract Architecture](#8-smart-contract-architecture)
 9. [Client Architecture](#9-client-architecture)
 10. [Node Operator Architecture](#10-node-operator-architecture)
@@ -157,7 +157,7 @@ Inherited from Sentinel's pluggable `ServerService` interface:
 
 The system operates across two chains:
 
-- **Ethereum (L1 or L2):** NFT membership contracts, reputation registry, DAO governance, staking/slashing. This is where economic security lives.
+- **Ethereum (L1 or L2):** NFT membership contracts, reputation registry, Community governance, staking/slashing. This is where economic security lives.
 - **Sentinel Hub (Cosmos):** Node registry, session management, bandwidth proofs, payment settlement. This is where network operations live.
 
 A **bridge oracle** synchronizes critical state between the two chains (e.g., "is this node registered and in good standing on Ethereum?" verified on Sentinel Hub before accepting sessions).
@@ -270,7 +270,7 @@ The reputation score is a composite value in the range [0, 1000], computed from 
 ```
 ReputationScore = (w1 * UptimeScore) + (w2 * QualityScore) + (w3 * StakeScore) + (w4 * HistoryScore)
 
-Default weights (DAO-governable):
+Default weights (Community-governable):
   w1 = 300 (Uptime/Availability)
   w2 = 300 (Service Quality)
   w3 = 200 (Stake & Skin-in-the-Game)
@@ -354,7 +354,7 @@ CleanRecord  = 40 if never slashed, 0 if slashed in last 6 months,
 
 1. Anyone can submit a dispute with a bond (e.g., 0.01 ETH).
 2. The dispute includes evidence (packet captures, DNS logs, cryptographic proofs).
-3. A dispute resolution committee (elected by the DAO) reviews the evidence.
+3. A dispute resolution committee (elected by the Community) reviews the evidence.
 4. If valid: operator is slashed, disputer's bond is returned + rewarded from the slashed amount.
 5. If invalid: disputer's bond is forfeited.
 
@@ -374,7 +374,7 @@ To prevent one entity from running many low-quality nodes and gaming the system:
 
 Quality measurements happen off-chain (client reports) but reputation scores are stored on-chain. An **oracle committee** bridges this gap:
 
-- A set of 7-15 members elected by the DAO.
+- A set of 7-15 members elected by the Community.
 - Each epoch, the committee aggregates off-chain quality reports.
 - A 2/3 majority must sign the aggregated scores before they are posted on-chain.
 - Committee members are rotated periodically and can be replaced via governance.
@@ -541,7 +541,7 @@ Functions:
 State:
   mapping(address => Node) public nodes
     Node: { operator, stakeAmount, registeredAt, reputationScore, status, endpoint }
-  uint256 public minimumStake                          // DAO-governed
+  uint256 public minimumStake                          // Community-governed
 
 Functions:
   registerNode(string endpoint) payable                 // Stake ETH + register
@@ -645,7 +645,7 @@ sovereign-node/
 Node operators earn revenue from:
 - **Session fees:** Paid-tier users pay per-GB or per-hour. Denominated in ETH at launch; the payment interface is token-agnostic (accepts any governance-whitelisted ERC-20), so $6529 can be added as a payment option via a TDH vote when the 6529 network token launches.
 - **Staking rewards:** A share of network fees distributed to stakers proportional to (stake * reputation).
-- **Free-tier subsidy:** THIS card holders use the network for free. Their bandwidth costs are covered by the DAO treasury (funded by paid-tier fees and slashed funds).
+- **Free-tier subsidy:** THIS card holders use the network for free. Their bandwidth costs are covered by the Community treasury (funded by paid-tier fees and slashed funds).
 
 Node operators pay for:
 - **Staking deposit:** Minimum ETH stake locked in NodeRegistry.
@@ -666,11 +666,11 @@ Node operators pay for:
 | **Flash loan governance attack** | NFTs cannot be flash-loaned. TDH requires holding duration, making it impossible to flash-borrow governance power. |
 | **Sybil nodes (many low-quality)** | Minimum stake per node, IP fingerprinting, diminishing returns, geographic diversity requirements. |
 | **51% governance attack** | Parameter bounds prevent destructive values. Tiered timelocks give honest participants time to react. Security Council can pause. |
-| **Oracle committee collusion** | 2/3 threshold, bonded committee members, DAO can replace, long-term goal is full decentralization of measurement. |
+| **Oracle committee collusion** | 2/3 threshold, bonded committee members, Community can replace, long-term goal is full decentralization of measurement. |
 
 ### 11.2 Privacy Properties
 
-- **The DAO and contracts never see traffic content.** Only bandwidth amounts and session metadata are recorded on-chain.
+- **The Community and contracts never see traffic content.** Only bandwidth amounts and session metadata are recorded on-chain.
 - **Node operators see traffic** (as with any VPN exit node). This is a fundamental property of VPNs, not unique to decentralized VPNs.
 - **The Access Gateway sees wallet addresses.** This is the most significant privacy trade-off: VPN usage is linkable to a wallet address. Mitigations: use a dedicated wallet for VPN, use delegate.xyz from a fresh wallet.
 - **On-chain session records are public.** Anyone can see that address X connected to node Y at time Z. The content of the session is not on-chain, but the metadata is. This is a meaningful privacy limitation compared to centralized VPNs that claim "no logs."
@@ -1173,10 +1173,10 @@ These are design decisions that need community input before implementation. Ques
 - [Chainlink Super-Linear Staking](https://blog.chain.link/explicit-staking-in-chainlink-2-0/)
 - [EigenTrust Algorithm (Stanford)](https://nlp.stanford.edu/pubs/eigentrust.pdf)
 
-### DAO Governance
+### Community Governance
 - [OpenZeppelin TimelockController](https://docs.openzeppelin.com/contracts/5.x/api/governance#TimelockController)
 - [Gnosis Safe](https://safe.global/)
-- [Nouns DAO (1 NFT = 1 Vote)](https://nouns.wtf)
+- [Nouns Community (1 NFT = 1 Vote)](https://nouns.wtf)
 
 ### 6529 Ecosystem
 - [The Memes by 6529](https://6529.io/the-memes) -- ERC-1155 collection at `0x33fd426905f149f8376e227d0c9d3340aad17af1`

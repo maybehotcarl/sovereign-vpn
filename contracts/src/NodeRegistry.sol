@@ -50,7 +50,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     /// @notice Whether an operator is registered.
     mapping(address => bool) public isRegistered;
 
-    /// @notice Accumulated slashed ETH (withdrawable by governance for the DAO treasury).
+    /// @notice Accumulated slashed ETH (withdrawable by governance for the community treasury).
     uint256 public slashedFunds;
 
     // =========================================================================
@@ -224,7 +224,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         emit NodeSlashed(operator, slashAmount, node.stakedAmount, reason);
     }
 
-    /// @notice Withdraw slashed funds to a DAO treasury address.
+    /// @notice Withdraw slashed funds to a community treasury address.
     /// @param to Treasury address
     function withdrawSlashedFunds(address to) external onlyOwner nonReentrant {
         if (to == address(0)) revert();

@@ -21,7 +21,7 @@ contract DeployNodeRegistry is Script {
         console.log("NodeRegistry deployed at:", address(registry));
 
         // 2. Deploy SessionManager
-        //    - treasury: deployer (for testing, DAO multi-sig on mainnet)
+        //    - treasury: deployer (for testing, community multi-sig on mainnet)
         //    - operatorShareBps: 8000 (80% to operator, 20% to treasury)
         //    - pricePerHour: 0.001 ETH (testnet pricing)
         //    - maxSessionDuration: 24 hours

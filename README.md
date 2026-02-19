@@ -2,7 +2,7 @@
 
 **An NFT-Gated, Reputation-Based, Community-Governed Decentralized VPN Network**
 
-Built for and governed by the [6529 community](https://seize.io).
+Built for and governed by the [6529 community](https://6529.io/).
 
 ---
 
@@ -12,8 +12,8 @@ Sovereign VPN is a decentralized VPN where:
 
 - **Access = holding a Memes card.** Any card from [The Memes by 6529](https://6529.io/the-memes) gets you in. No accounts, no emails, no KYC.
 - **This project's Meme card = free VPN.** The card representing this idea is your free pass. All other Memes holders pay a fee.
-- **Node operators stake ETH and earn community rep.** Quality is enforced by the [6529 reputation system](https://seize.io) — operators need 50,000 "VPN Operator" rep (given by TDH holders) to run a node. On-chain staking + slashing backs it up.
-- **All governance is TDH-weighted.** No new token. No new voting system. Decisions happen on [seize.io](https://seize.io) using existing 6529 network infrastructure.
+- **Node operators stake ETH and earn community rep.** Quality is enforced by the [6529 reputation system](https://6529.io/) — operators need 50,000 "VPN Operator" rep (given by TDH holders) to run a node. On-chain staking + slashing backs it up.
+- **All governance is TDH-weighted.** No new token. No new voting system. Decisions happen on [6529.io](https://6529.io/) using existing 6529 network infrastructure.
 
 ## Project Status
 
@@ -192,7 +192,7 @@ If you're in the 6529 community and want to help build this, open an issue or re
 
 - [Technical Specification](./TECHNICAL-SPEC.md)
 - [The Memes by 6529](https://6529.io/the-memes)
-- [6529 Network / seize.io](https://seize.io)
+- [6529 Network / 6529.io](https://6529.io/)
 - [Sentinel dVPN Node](https://github.com/sentinel-official/dvpn-node)
 - [EIP-4361: Sign-In with Ethereum](https://eips.ethereum.org/EIPS/eip-4361)
 - [delegate.xyz](https://docs.delegate.xyz/)
