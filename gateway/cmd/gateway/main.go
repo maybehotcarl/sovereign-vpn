@@ -16,6 +16,8 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/delegation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/revocation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
@@ -41,6 +43,20 @@ func main() {
 	enableDelegation := flag.Bool("delegation", false, "Enable delegation registry lookups")
 	enableDelegateXYZ := flag.Bool("delegate-xyz", true, "Check delegate.xyz v2 registry")
 	enable6529 := flag.Bool("delegation-6529", true, "Check 6529 delegation registry")
+
+	// Node registry flags
+	nodeRegistryContract := flag.String("node-registry", "", "NodeRegistry contract address")
+	nodeRegistryCacheTTL := flag.Duration("node-cache-ttl", 2*time.Minute, "Node registry cache TTL")
+
+	// 6529 Rep flags
+	repMinimum := flag.Int64("rep-min", rep6529.DefaultMinRep, "Minimum 6529 rep to operate a node")
+	repCategory := flag.String("rep-category", rep6529.DefaultCategory, "6529 rep category name")
+	repAPIURL := flag.String("rep-api-url", rep6529.DefaultBaseURL, "6529 rep API base URL")
+	repCacheTTL := flag.Duration("rep-cache-ttl", 5*time.Minute, "6529 rep cache TTL")
+
+	// Heartbeat flags (for node operators running a gateway)
+	heartbeatKey := flag.String("heartbeat-key", "", "Private key hex for sending heartbeat txs (node operator mode)")
+	heartbeatInterval := flag.Duration("heartbeat-interval", 30*time.Minute, "Heartbeat send interval")
 
 	flag.Parse()
 
@@ -124,6 +140,41 @@ func main() {
 	srv := server.New(cfg, checker, wgManager)
 	srv.SetChainID(*chainID)
 
+	// Configure node registry if contract address is provided
+	if *nodeRegistryContract != "" {
+		registry, err := noderegistry.NewRegistry(cfg.EthereumRPC, *nodeRegistryContract, *nodeRegistryCacheTTL)
+		if err != nil {
+			log.Fatalf("Failed to create node registry: %v", err)
+		}
+		defer registry.Close()
+		srv.SetRegistry(registry)
+		log.Printf("Node registry enabled: %s", *nodeRegistryContract)
+
+		// Configure 6529 rep checker for node eligibility
+		repChecker := rep6529.NewChecker(rep6529.Config{
+			BaseURL:  *repAPIURL,
+			Category: *repCategory,
+			MinRep:   *repMinimum,
+			CacheTTL: *repCacheTTL,
+		})
+		srv.SetRepChecker(repChecker)
+		log.Printf("6529 rep filter enabled: category=%q min=%d", *repCategory, *repMinimum)
+
+		// Start heartbeat sender if private key is provided (node operator mode)
+		if *heartbeatKey != "" {
+			hb, err := noderegistry.NewHeartbeatSender(
+				cfg.EthereumRPC, *nodeRegistryContract, *heartbeatKey,
+				int64(*chainID), *heartbeatInterval,
+			)
+			if err != nil {
+				log.Fatalf("Failed to create heartbeat sender: %v", err)
+			}
+			go hb.Start(context.Background())
+			defer hb.Stop()
+			log.Printf("Heartbeat sender started (interval=%s)", *heartbeatInterval)
+		}
+	}
+
 	// Start transfer event watcher if WebSocket endpoint is configured
 	if *ethWS != "" && cfg.MemesContract != "" {
 		revoker := server.NewRevoker(srv)
@@ -147,6 +198,10 @@ func main() {
 	log.Printf("  WG Endpoint:   %s", *wgEndpoint)
 	log.Printf("  WG Subnet:     %s", *wgSubnet)
 	log.Printf("  Delegation:    %v", *enableDelegation)
+	if *nodeRegistryContract != "" {
+		log.Printf("  NodeRegistry:  %s", *nodeRegistryContract)
+		log.Printf("  6529 Rep Min:  %d (%s)", *repMinimum, *repCategory)
+	}
 
 	// Graceful shutdown
 	httpSrv := &http.Server{

@@ -12,7 +12,7 @@ Sovereign VPN is a decentralized VPN where:
 
 - **Access = holding a Memes card.** Any card from [The Memes by 6529](https://6529.io/the-memes) gets you in. No accounts, no emails, no KYC.
 - **This project's Meme card = free VPN.** The card representing this idea is your free pass. All other Memes holders pay a fee.
-- **Node operators stake ETH and earn reputation.** Quality is enforced by an on-chain reputation system with slashing for misbehavior.
+- **Node operators stake ETH and earn community rep.** Quality is enforced by the [6529 reputation system](https://seize.io) — operators need 50,000 "VPN Operator" rep (given by TDH holders) to run a node. On-chain staking + slashing backs it up.
 - **All governance is TDH-weighted.** No new token. No new voting system. Decisions happen on [seize.io](https://seize.io) using existing 6529 network infrastructure.
 
 ## Project Status
@@ -22,20 +22,21 @@ Sovereign VPN is a decentralized VPN where:
 | Component | Status | Tests |
 |-----------|--------|-------|
 | Smart Contracts (AccessPolicy, TestMemes) | Deployed (Sepolia) | 38 passing |
-| NodeRegistry (staking, reputation, slashing) | Built | 38 passing |
-| SessionManager (payments, revenue split) | Built | 28 passing |
+| NodeRegistry (staking, heartbeat, slashing) | Deployed (Sepolia) | 35 passing |
+| SessionManager (payments, revenue split) | Deployed (Sepolia) | 28 passing |
 | SIWE Authentication Gateway | Built | 9 passing |
 | NFT Gate Middleware + Sessions | Built | 11 passing |
 | WireGuard Peer Manager | Built | 11 passing |
 | Delegation Support (delegate.xyz + 6529) | Built | 5 passing |
 | Transfer Event Revocation | Built | 5 passing |
+| 6529 Rep Integration (api.6529.io) | Built | 10 passing |
 | Node Registry Go Client + Discovery API | Built | - |
 | CLI Client (`svpn`) | Built | 19 passing |
 | End-to-End Integration Tests (mock + Sepolia) | Built | 9 passing |
 | GitHub Actions CI | Configured | - |
 | Docker Support | Configured | - |
 
-**Total: 173 tests across Solidity + Go**
+**Total: 180 tests across Solidity + Go**
 
 ### Sepolia Testnet Contracts
 
@@ -43,6 +44,8 @@ Sovereign VPN is a decentralized VPN where:
 |----------|---------|
 | TestMemes (ERC-1155) | `0x98C361b7C385b9589E60B36B880501D66123B294` |
 | AccessPolicy | `0xF1AfCFD8eF6a869987D50e173e22F6fc99431712` |
+| NodeRegistry | `0x35E5DB4132EB20E1Fab24Bb016BD87f382645018` |
+| SessionManager | `0x2F13DE263b2Ceec57355833bDcC63b2a99853537` |
 
 ## Architecture
 
@@ -62,6 +65,7 @@ Sovereign VPN is a decentralized VPN where:
 │  POST /vpn/connect     → WireGuard peer config   │
 │  POST /vpn/disconnect  → peer removal            │
 │  GET  /vpn/status      → session info            │
+│  GET  /nodes           → node discovery           │
 │  GET  /health          → gateway status           │
 │                                                  │
 │  ┌─────────────┐ ┌──────────────┐ ┌───────────┐ │
@@ -69,14 +73,21 @@ Sovereign VPN is a decentralized VPN where:
 │  │ AccessPolicy │ │ delegate.xyz │ │ Transfer  │ │
 │  │ on-chain call│ │ 6529 registry│ │ events WS │ │
 │  └─────────────┘ └──────────────┘ └───────────┘ │
+│  ┌──────────────────┐ ┌────────────────────────┐ │
+│  │ 6529 Rep Checker  │ │ Node Registry Client   │ │
+│  │ api.6529.io       │ │ NodeRegistry on-chain  │ │
+│  │ "VPN Operator" rep│ │ heartbeat + discovery  │ │
+│  └──────────────────┘ └────────────────────────┘ │
 └──────────────────────┬──────────────────────────┘
                        │
               WireGuard (UDP :51820)
                        │
 ┌──────────────────────▼──────────────────────────┐
 │            Ethereum Smart Contracts              │
-│  AccessPolicy.sol   - NFT ownership → tier       │
-│  TestMemes.sol      - Sepolia test ERC-1155      │
+│  AccessPolicy.sol    - NFT ownership → tier      │
+│  NodeRegistry.sol    - node staking + heartbeat  │
+│  SessionManager.sol  - payments + revenue split  │
+│  TestMemes.sol       - Sepolia test ERC-1155     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -115,12 +126,15 @@ sudo wg-quick up ./sovereign-vpn.conf
 ./bin/sovereign-gateway \
   --listen :8080 \
   --eth-rpc 'https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY' \
-  --policy-contract '0xYOUR_ACCESS_POLICY' \
-  --memes-contract '0x33fd426905f149f8376e227d0c9d3340aad17af1' \
+  --policy-contract '0xF1AfCFD8eF6a869987D50e173e22F6fc99431712' \
+  --memes-contract '0x98C361b7C385b9589E60B36B880501D66123B294' \
+  --node-registry '0x35E5DB4132EB20E1Fab24Bb016BD87f382645018' \
   --wg-interface wg0 \
   --wg-pubkey 'YOUR_WG_PUBLIC_KEY' \
   --wg-endpoint 'your-server:51820' \
-  --delegation
+  --delegation \
+  --rep-min 50000 \
+  --rep-category 'VPN Operator'
 ```
 
 See [deploy/setup-node.sh](deploy/setup-node.sh) for full VPS setup.
@@ -147,6 +161,7 @@ sovereign-vpn/
 │   │   ├── delegation/         # delegate.xyz v2 + 6529 registry
 │   │   ├── revocation/         # ERC-1155 transfer event watcher
 │   │   ├── noderegistry/       # On-chain node registry client + heartbeat
+│   │   ├── rep6529/            # 6529 community rep checker (api.6529.io)
 │   │   └── server/             # HTTP handlers + node discovery API
 │   └── Dockerfile
 ├── client/             # Go CLI client
