@@ -61,6 +61,9 @@ export default function VPNConnect({ gatewayUrl = '' }) {
       const verifyData = await verifyResp.json();
 
       if (verifyData.tier === 'denied') {
+        if (verifyData.error && verifyData.error.includes('banned')) {
+          throw new Error('This wallet has been banned by the community.');
+        }
         throw new Error('No Memes card found in this wallet. You need at least one card from The Memes by 6529.');
       }
       if (!verifyResp.ok) {

@@ -60,6 +60,10 @@ func main() {
 	repAPIURL := flag.String("rep-api-url", rep6529.DefaultBaseURL, "6529 rep API base URL")
 	repCacheTTL := flag.Duration("rep-cache-ttl", 5*time.Minute, "6529 rep cache TTL")
 
+	// User ban check flags
+	userBanCheck := flag.Bool("user-ban-check", false, "Enable user rep ban checking via 6529 rep")
+	userBanCategory := flag.String("user-ban-category", "VPN User", "6529 rep category for user ban checking")
+
 	// CORS flag
 	corsOrigin := flag.String("cors-origin", "", "Allowed CORS origin (e.g. https://6529vpn.io)")
 
@@ -203,6 +207,17 @@ func main() {
 	if *corsOrigin != "" {
 		srv.SetCORSOrigin(*corsOrigin)
 		log.Printf("CORS enabled for origin: %s", *corsOrigin)
+	}
+
+	// Configure user ban check if enabled
+	if *userBanCheck {
+		userRepChecker := rep6529.NewChecker(rep6529.Config{
+			Category: *userBanCategory,
+			MinRep:   1, // placeholder; we check Rating < 0 directly
+			CacheTTL: *repCacheTTL,
+		})
+		srv.SetUserRepChecker(userRepChecker)
+		log.Printf("User ban check enabled: category=%q", *userBanCategory)
 	}
 
 	// Configure node registry if contract address is provided

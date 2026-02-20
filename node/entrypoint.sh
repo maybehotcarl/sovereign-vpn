@@ -80,6 +80,14 @@ if [ "${DELEGATION:-false}" = "true" ]; then
     ARGS+=(--delegation)
 fi
 
+# Optional: user ban check
+if [ "${USER_BAN_CHECK:-false}" = "true" ]; then
+    ARGS+=(--user-ban-check)
+    if [ -n "${USER_BAN_CATEGORY:-}" ]; then
+        ARGS+=(--user-ban-category "$USER_BAN_CATEGORY")
+    fi
+fi
+
 # Optional: node registry + heartbeat
 if [ -n "${NODE_REGISTRY:-}" ]; then
     ARGS+=(--node-registry "$NODE_REGISTRY")

@@ -25,6 +25,7 @@ type Server struct {
 	wg         *wireguard.Manager
 	registry   *noderegistry.Registry
 	rep        *rep6529.Checker
+	userRep    *rep6529.Checker
 	mux        *http.ServeMux
 	corsOrigin string
 }
@@ -72,6 +73,11 @@ func (s *Server) SetRegistry(r *noderegistry.Registry) {
 // SetRepChecker configures the 6529 rep checker for node eligibility.
 func (s *Server) SetRepChecker(r *rep6529.Checker) {
 	s.rep = r
+}
+
+// SetUserRepChecker configures the 6529 rep checker for user ban checking.
+func (s *Server) SetUserRepChecker(r *rep6529.Checker) {
+	s.userRep = r
 }
 
 // SetCORSOrigin configures the allowed CORS origin for cross-origin requests.
@@ -211,6 +217,22 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			Tier:    result.Tier.String(),
 		})
 		return
+	}
+
+	// Step 3b: Check user rep ban list (if enabled)
+	if s.userRep != nil {
+		repResult, err := s.userRep.CheckRep(r.Context(), auth.Address.Hex())
+		if err != nil {
+			log.Printf("Warning: user rep check failed for %s: %v (allowing access)", auth.Address.Hex(), err)
+		} else if repResult.Rating < 0 {
+			log.Printf("Access denied (banned): %s rep=%d in %q", auth.Address.Hex(), repResult.Rating, s.userRep.Category())
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"address": auth.Address.Hex(),
+				"tier":    "denied",
+				"error":   "wallet banned: negative reputation in VPN User category",
+			})
+			return
+		}
 	}
 
 	// Step 4: Create a session
