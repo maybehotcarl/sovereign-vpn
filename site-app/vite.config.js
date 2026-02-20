@@ -12,6 +12,7 @@ export default defineConfig({
       '/auth': 'http://localhost:8080',
       '/vpn': 'http://localhost:8080',
       '/nodes': 'http://localhost:8080',
+      '/session': 'http://localhost:8080',
     },
   },
 })

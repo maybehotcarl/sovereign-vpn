@@ -57,6 +57,9 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	s.mux.HandleFunc("POST /vpn/disconnect", s.handleVPNDisconnect)
 	s.mux.HandleFunc("GET /vpn/status", s.handleVPNStatus)
 
+	// Session info (public — returns contract/pricing for frontend)
+	s.mux.HandleFunc("GET /session/info", s.handleSessionInfo)
+
 	// Node discovery endpoint (public)
 	s.mux.HandleFunc("GET /nodes", s.handleListNodes)
 	s.mux.HandleFunc("GET /nodes/region", s.handleListNodesByRegion)
@@ -247,8 +250,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	// Step 4: Create a session
 	session := s.gate.CreateSession(auth.Address, result.Tier)
 
-	// Step 5: Record session on-chain (fire-and-forget)
-	if s.sessionMgr != nil {
+	// Step 5: Record free session on-chain (fire-and-forget).
+	// Paid sessions are opened by the user directly via the contract.
+	if s.sessionMgr != nil && result.Tier == nftcheck.TierFree {
 		s.sessionMgr.OpenFreeSession(auth.Address, uint64(s.cfg.CredentialTTL.Seconds()))
 	}
 
@@ -259,6 +263,26 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		Tier:      result.Tier.String(),
 		ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// =========================================================================
+//                          SESSION HANDLERS
+// =========================================================================
+
+// GET /session/info — returns contract address, pricing, and node operator
+// for the frontend to construct the openSession transaction.
+func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
+	if s.sessionMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "session manager not configured")
+		return
+	}
+	info, err := s.sessionMgr.GetSessionInfo(r.Context())
+	if err != nil {
+		log.Printf("Error getting session info: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to read session info from contract")
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // =========================================================================
@@ -308,7 +332,40 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Provision WireGuard peer
+	// For paid tier, verify on-chain payment before provisioning
+	if session.Tier == nftcheck.TierPaid && s.sessionMgr != nil {
+		sessionID, err := s.sessionMgr.GetActiveSessionID(r.Context(), session.Address)
+		if err != nil || sessionID == 0 {
+			writeError(w, http.StatusPaymentRequired, "on-chain payment required for paid tier")
+			return
+		}
+		onChain, err := s.sessionMgr.GetSession(r.Context(), sessionID)
+		if err != nil || onChain.Payment.Sign() == 0 {
+			writeError(w, http.StatusPaymentRequired, "on-chain payment not found")
+			return
+		}
+		// Use on-chain duration for WireGuard peer TTL
+		peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Duration(onChain.Duration)*time.Second)
+		if err != nil {
+			log.Printf("Error adding WireGuard peer: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
+			return
+		}
+		expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
+		log.Printf("VPN connected (paid): %s -> %s (duration=%ds)", session.Address.Hex(), peerCfg.ClientAddress, onChain.Duration)
+		writeJSON(w, http.StatusOK, ConnectResponse{
+			ServerPublicKey: peerCfg.ServerPublicKey,
+			ServerEndpoint:  peerCfg.ServerEndpoint,
+			ClientAddress:   peerCfg.ClientAddress,
+			DNS:             peerCfg.DNS,
+			AllowedIPs:      peerCfg.AllowedIPs,
+			ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
+			Tier:            session.Tier.String(),
+		})
+		return
+	}
+
+	// Provision WireGuard peer (free tier or no session manager)
 	peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Until(session.ExpiresAt))
 	if err != nil {
 		log.Printf("Error adding WireGuard peer: %v", err)
