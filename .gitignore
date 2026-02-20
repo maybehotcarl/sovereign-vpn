@@ -9,11 +9,17 @@ contracts/cache/
 # Node modules
 node_modules/
 
+# ZK build artifacts (regenerable via zk/scripts/build.sh)
+zk/build/
+
 # Environment files
 .env
 .env.*
 !.env.example
 !**/.env.example
+
+# White paper (not published in repo)
+WHITEPAPER.md
 
 # OS files
 .DS_Store
