@@ -2,9 +2,11 @@
 research/dvpn-node/
 research/sentinel-go-sdk/
 
-# Foundry build artifacts
+# Foundry build artifacts and dependencies
 contracts/out/
 contracts/cache/
+contracts/broadcast/
+contracts/lib/
 
 # Node modules
 node_modules/
