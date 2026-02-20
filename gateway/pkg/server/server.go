@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
@@ -26,6 +29,7 @@ type Server struct {
 	registry   *noderegistry.Registry
 	rep        *rep6529.Checker
 	userRep    *rep6529.Checker
+	sessionMgr *sessionmgr.Manager
 	mux        *http.ServeMux
 	corsOrigin string
 }
@@ -78,6 +82,11 @@ func (s *Server) SetRepChecker(r *rep6529.Checker) {
 // SetUserRepChecker configures the 6529 rep checker for user ban checking.
 func (s *Server) SetUserRepChecker(r *rep6529.Checker) {
 	s.userRep = r
+}
+
+// SetSessionManager configures the on-chain session manager.
+func (s *Server) SetSessionManager(m *sessionmgr.Manager) {
+	s.sessionMgr = m
 }
 
 // SetCORSOrigin configures the allowed CORS origin for cross-origin requests.
@@ -238,6 +247,11 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	// Step 4: Create a session
 	session := s.gate.CreateSession(auth.Address, result.Tier)
 
+	// Step 5: Record session on-chain (fire-and-forget)
+	if s.sessionMgr != nil {
+		s.sessionMgr.OpenFreeSession(auth.Address, uint64(s.cfg.CredentialTTL.Seconds()))
+	}
+
 	log.Printf("Access granted: %s tier=%s", auth.Address.Hex(), result.Tier)
 
 	writeJSON(w, http.StatusOK, VerifyResponse{
@@ -327,6 +341,11 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 	if err := s.wg.RemovePeer(req.PublicKey); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
+	}
+
+	// Close on-chain session (fire-and-forget)
+	if s.sessionMgr != nil {
+		s.sessionMgr.CloseSessionFor(common.Address(parseAddress(req.SessionToken)))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})

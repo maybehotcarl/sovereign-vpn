@@ -88,6 +88,14 @@ if [ "${USER_BAN_CHECK:-false}" = "true" ]; then
     fi
 fi
 
+# Optional: session manager (on-chain session tracking)
+if [ -n "${SESSION_MANAGER:-}" ]; then
+    ARGS+=(--session-manager "$SESSION_MANAGER")
+    if [ -n "${SESSION_KEY:-}" ]; then
+        ARGS+=(--session-key "$SESSION_KEY")
+    fi
+fi
+
 # Optional: node registry + heartbeat
 if [ -n "${NODE_REGISTRY:-}" ]; then
     ARGS+=(--node-registry "$NODE_REGISTRY")

@@ -25,5 +25,10 @@ func (r *Revoker) InvalidateAndRevoke(wallet common.Address) {
 	// Revoke session via the gate
 	r.srv.gate.RevokeSession(wallet)
 
+	// Close on-chain session (fire-and-forget)
+	if r.srv.sessionMgr != nil {
+		r.srv.sessionMgr.CloseSessionFor(wallet)
+	}
+
 	log.Printf("[revoker] Invalidated cache and revoked session for %s", wallet.Hex())
 }

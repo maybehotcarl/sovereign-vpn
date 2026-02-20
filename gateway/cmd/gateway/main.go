@@ -20,6 +20,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/revocation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 )
 
@@ -70,6 +71,10 @@ func main() {
 	// Heartbeat flags (for node operators running a gateway)
 	heartbeatKey := flag.String("heartbeat-key", "", "Private key hex for sending heartbeat txs (node operator mode)")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 30*time.Minute, "Heartbeat send interval")
+
+	// SessionManager flags
+	sessionManagerContract := flag.String("session-manager", "", "SessionManager contract address (enables on-chain session tracking)")
+	sessionKey := flag.String("session-key", "", "Private key hex for SessionManager txs (contract owner)")
 
 	flag.Parse()
 
@@ -255,6 +260,25 @@ func main() {
 		}
 	}
 
+	// Configure SessionManager if contract address is provided
+	if *sessionManagerContract != "" {
+		keyHex := *sessionKey
+		if keyHex == "" {
+			keyHex = *heartbeatKey // fall back to heartbeat key
+		}
+		if keyHex == "" {
+			log.Printf("Warning: --session-manager set without --session-key; on-chain sessions disabled")
+		} else {
+			sm, err := sessionmgr.New(cfg.EthereumRPC, *sessionManagerContract, keyHex, int64(*chainID))
+			if err != nil {
+				log.Fatalf("Failed to create session manager: %v", err)
+			}
+			defer sm.Close()
+			srv.SetSessionManager(sm)
+			log.Printf("SessionManager enabled: %s", *sessionManagerContract)
+		}
+	}
+
 	// Start transfer event watcher if WebSocket endpoint is configured
 	if *ethWS != "" && cfg.MemesContract != "" {
 		revoker := server.NewRevoker(srv)
@@ -281,6 +305,9 @@ func main() {
 	if *nodeRegistryContract != "" {
 		log.Printf("  NodeRegistry:  %s", *nodeRegistryContract)
 		log.Printf("  6529 Rep Min:  %d (%s)", *repMinimum, *repCategory)
+	}
+	if *sessionManagerContract != "" {
+		log.Printf("  SessionMgr:    %s", *sessionManagerContract)
 	}
 
 	// Graceful shutdown
