@@ -60,6 +60,9 @@ func main() {
 	repAPIURL := flag.String("rep-api-url", rep6529.DefaultBaseURL, "6529 rep API base URL")
 	repCacheTTL := flag.Duration("rep-cache-ttl", 5*time.Minute, "6529 rep cache TTL")
 
+	// CORS flag
+	corsOrigin := flag.String("cors-origin", "", "Allowed CORS origin (e.g. https://6529vpn.io)")
+
 	// Heartbeat flags (for node operators running a gateway)
 	heartbeatKey := flag.String("heartbeat-key", "", "Private key hex for sending heartbeat txs (node operator mode)")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 30*time.Minute, "Heartbeat send interval")
@@ -196,6 +199,11 @@ func main() {
 	// Create and start server
 	srv := server.New(cfg, checker, wgManager)
 	srv.SetChainID(*chainID)
+
+	if *corsOrigin != "" {
+		srv.SetCORSOrigin(*corsOrigin)
+		log.Printf("CORS enabled for origin: %s", *corsOrigin)
+	}
 
 	// Configure node registry if contract address is provided
 	if *nodeRegistryContract != "" {

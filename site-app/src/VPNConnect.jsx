@@ -10,7 +10,7 @@ const STEPS = [
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
 
-export default function VPNConnect() {
+export default function VPNConnect({ gatewayUrl = '' }) {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
 
@@ -34,7 +34,7 @@ export default function VPNConnect() {
 
     try {
       // Step 0: Get challenge
-      const challengeResp = await fetch('/auth/challenge', {
+      const challengeResp = await fetch(`${gatewayUrl}/auth/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address }),
@@ -53,7 +53,7 @@ export default function VPNConnect() {
 
       // Step 2: Verify signature + check NFT
       setCurrentStep(2);
-      const verifyResp = await fetch('/auth/verify', {
+      const verifyResp = await fetch(`${gatewayUrl}/auth/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: challenge.message, signature }),
@@ -72,7 +72,7 @@ export default function VPNConnect() {
       setCurrentStep(3);
       const keys = generateKeyPair();
 
-      const connectResp = await fetch('/vpn/connect', {
+      const connectResp = await fetch(`${gatewayUrl}/vpn/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,7 +109,7 @@ export default function VPNConnect() {
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [address, signMessageAsync]);
+  }, [address, signMessageAsync, gatewayUrl]);
 
   const downloadConfig = () => {
     const blob = new Blob([vpnConfig], { type: 'text/plain' });

@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import GatewayStatus from './GatewayStatus';
 import VPNConnect from './VPNConnect';
+import NodeSelector from './NodeSelector';
 
 export default function App() {
+  const [gatewayUrl, setGatewayUrl] = useState('');
+
   return (
     <div className="container">
       <div className="hero">
@@ -10,10 +14,12 @@ export default function App() {
           An NFT-gated VPN for the 6529 community. Hold a Memes card, get a VPN.
           No accounts. No emails. No KYC.
         </p>
-        <GatewayStatus />
+        <GatewayStatus gatewayUrl={gatewayUrl} />
       </div>
 
-      <VPNConnect />
+      <NodeSelector onSelect={setGatewayUrl} />
+
+      <VPNConnect gatewayUrl={gatewayUrl} />
 
       <section>
         <h2>How It Works</h2>

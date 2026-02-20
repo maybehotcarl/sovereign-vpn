@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 
-export default function GatewayStatus() {
+export default function GatewayStatus({ gatewayUrl = '' }) {
   const [status, setStatus] = useState({ online: null, peers: 0 });
 
   useEffect(() => {
-    fetch('/health')
+    fetch(`${gatewayUrl}/health`)
       .then(r => r.json())
       .then(data => {
         setStatus({
@@ -13,7 +13,7 @@ export default function GatewayStatus() {
         });
       })
       .catch(() => setStatus({ online: false, peers: 0 }));
-  }, []);
+  }, [gatewayUrl]);
 
   if (status.online === null) {
     return (

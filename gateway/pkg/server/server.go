@@ -18,14 +18,15 @@ import (
 
 // Server is the Sovereign VPN gateway.
 type Server struct {
-	cfg      *config.Config
-	siwe     *siwe.Service
-	checker  nftcheck.AccessChecker
-	gate     *nftgate.Gate
-	wg       *wireguard.Manager
-	registry *noderegistry.Registry
-	rep      *rep6529.Checker
-	mux      *http.ServeMux
+	cfg        *config.Config
+	siwe       *siwe.Service
+	checker    nftcheck.AccessChecker
+	gate       *nftgate.Gate
+	wg         *wireguard.Manager
+	registry   *noderegistry.Registry
+	rep        *rep6529.Checker
+	mux        *http.ServeMux
+	corsOrigin string
 }
 
 // New creates a new gateway server.
@@ -73,9 +74,34 @@ func (s *Server) SetRepChecker(r *rep6529.Checker) {
 	s.rep = r
 }
 
+// SetCORSOrigin configures the allowed CORS origin for cross-origin requests.
+func (s *Server) SetCORSOrigin(origin string) {
+	s.corsOrigin = origin
+}
+
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	if s.corsOrigin == "" {
+		return s.mux
+	}
+	return s.corsMiddleware(s.mux)
+}
+
+// corsMiddleware wraps a handler with CORS headers for the configured origin.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ListenAndServe starts the HTTP server.

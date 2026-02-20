@@ -66,7 +66,9 @@ Commands:
 Flags (connect/disconnect/status):
   --gateway    Gateway URL (default: http://localhost:8080)
   --key        Path to wallet key file
-  --wg-conf    Path to write WireGuard config (default: sovereign-vpn.conf)`)
+  --wg-conf    Path to write WireGuard config (default: sovereign-vpn.conf)
+  --auto-node  Automatically select the best available node
+  --region     Preferred region for auto-node selection (e.g. us-east)`)
 }
 
 func cmdConnect(args []string) {
@@ -74,6 +76,8 @@ func cmdConnect(args []string) {
 	gateway := fs.String("gateway", "http://localhost:8080", "Gateway URL")
 	keyFile := fs.String("key", "", "Path to wallet private key file")
 	wgConfPath := fs.String("wg-conf", "sovereign-vpn.conf", "Path to write WireGuard config")
+	autoNode := fs.Bool("auto-node", false, "Automatically select the best available node")
+	region := fs.String("region", "", "Preferred region for auto-node selection (e.g. us-east)")
 	fs.Parse(args)
 
 	if *keyFile == "" {
@@ -87,7 +91,47 @@ func cmdConnect(args []string) {
 	}
 	log.Printf("Wallet: %s", w.AddressHex())
 
-	client := api.NewClient(*gateway)
+	// Auto-node selection: fetch node list and pick the best one
+	targetGateway := *gateway
+	if *autoNode {
+		log.Println("Fetching available nodes...")
+		discovery := api.NewClient(*gateway)
+
+		var resp *api.NodesResponse
+		if *region != "" {
+			resp, err = discovery.ListNodesByRegion(*region)
+		} else {
+			resp, err = discovery.ListNodes()
+		}
+		if err != nil {
+			log.Printf("Warning: auto-node discovery failed: %v (using --gateway)", err)
+		} else if resp.Count > 0 {
+			// Pick node with highest rep
+			best := resp.Nodes[0]
+			for _, n := range resp.Nodes[1:] {
+				if n.Rep > best.Rep {
+					best = n
+				}
+			}
+			hostname := best.Endpoint
+			// Strip port if present
+			if idx := len(hostname) - 1; idx > 0 {
+				for i := len(hostname) - 1; i >= 0; i-- {
+					if hostname[i] == ':' {
+						hostname = hostname[:i]
+						break
+					}
+				}
+			}
+			targetGateway = "https://" + hostname
+			log.Printf("Selected node: %s (region=%s, rep=%d, operator=%s)",
+				targetGateway, best.Region, best.Rep, best.Operator)
+		} else {
+			log.Println("No nodes available, using default gateway")
+		}
+	}
+
+	client := api.NewClient(targetGateway)
 
 	// Step 1: Get challenge
 	log.Println("Requesting authentication challenge...")
