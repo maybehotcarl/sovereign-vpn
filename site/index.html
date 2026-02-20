@@ -13,6 +13,8 @@
       --muted: #888;
       --accent: #4ecdc4;
       --accent-dim: #2a7a74;
+      --error: #f44336;
+      --success: #4caf50;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -23,14 +25,14 @@
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
 
     .container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
 
     /* Hero */
     .hero {
-      padding: 80px 0 60px;
+      padding: 80px 0 40px;
       text-align: center;
-      border-bottom: 1px solid var(--border);
     }
     .hero h1 {
       font-size: 2.5rem;
@@ -61,9 +63,96 @@
     .status-dot {
       width: 8px; height: 8px;
       border-radius: 50%;
-      background: #4caf50;
+      background: var(--success);
     }
-    .status-dot.offline { background: #f44336; }
+    .status-dot.offline { background: var(--error); }
+
+    /* Connect section */
+    .connect-section {
+      padding: 48px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .connect-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      text-align: center;
+    }
+    .connect-btn {
+      display: inline-block;
+      padding: 14px 32px;
+      background: var(--accent);
+      color: #0a0a0a;
+      font-weight: 700;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .connect-btn:hover { opacity: 0.9; }
+    .connect-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .connect-btn.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    .flow-status {
+      margin-top: 20px;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    .flow-status.error { color: var(--error); }
+    .flow-status.success { color: var(--success); }
+
+    .flow-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    .flow-step.active { color: var(--text); }
+    .flow-step.done { color: var(--success); }
+    .flow-step.error { color: var(--error); }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .checkmark::before { content: '\2713'; font-weight: bold; }
+    .crossmark::before { content: '\2717'; font-weight: bold; }
+
+    /* Config display */
+    .config-box {
+      margin-top: 20px;
+      text-align: left;
+    }
+    .config-display {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--accent);
+      margin: 12px 0;
+    }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 16px;
+    }
 
     /* Sections */
     section { padding: 48px 0; border-bottom: 1px solid var(--border); }
@@ -75,11 +164,8 @@
       color: var(--accent);
     }
 
-    /* How it works */
-    .steps {
-      display: grid;
-      gap: 16px;
-    }
+    /* Steps */
+    .steps { display: grid; gap: 16px; }
     .step {
       display: flex;
       gap: 16px;
@@ -122,10 +208,7 @@
       font-size: 0.95rem;
       transition: border-color 0.2s;
     }
-    .dl-btn:hover {
-      border-color: var(--accent);
-      text-decoration: none;
-    }
+    .dl-btn:hover { border-color: var(--accent); text-decoration: none; }
     .dl-btn .os { font-weight: 600; }
     .dl-btn .arch { color: var(--muted); font-size: 0.8rem; }
 
@@ -140,15 +223,10 @@
       overflow-x: auto;
       margin: 12px 0;
     }
-    .code-block .comment { color: #666; }
     .code-block .cmd { color: var(--accent); }
 
     /* Requirements */
-    .req-list {
-      list-style: none;
-      display: grid;
-      gap: 8px;
-    }
+    .req-list { list-style: none; display: grid; gap: 8px; }
     .req-list li {
       padding: 12px 16px;
       background: var(--surface);
@@ -157,6 +235,8 @@
       font-size: 0.95rem;
     }
     .req-list li strong { color: var(--accent); }
+
+    .hidden { display: none !important; }
 
     /* Footer */
     footer {
@@ -183,6 +263,52 @@
     </div>
   </div>
 
+  <!-- Connect Wallet Flow -->
+  <div class="connect-section">
+    <div class="connect-box">
+      <!-- Initial state -->
+      <div id="connect-initial">
+        <h2 style="margin-bottom: 12px;">Connect & Get VPN Config</h2>
+        <p style="color: var(--muted); margin-bottom: 24px;">Sign in with your wallet to verify your Memes card and get a WireGuard config file.</p>
+        <button class="connect-btn" id="connect-btn" onclick="startConnect()">Connect Wallet</button>
+        <p id="no-wallet-msg" class="hidden" style="color: var(--error); margin-top: 16px; font-size: 0.9rem;">
+          No wallet detected. Install <a href="https://metamask.io" target="_blank">MetaMask</a> or use the CLI client below.
+        </p>
+      </div>
+
+      <!-- Flow progress -->
+      <div id="connect-flow" class="hidden">
+        <div class="flow-step" id="step-wallet"><div class="spinner"></div> Connecting wallet...</div>
+        <div class="flow-step" id="step-challenge"><div class="spinner"></div> Requesting challenge...</div>
+        <div class="flow-step" id="step-sign"><div class="spinner"></div> Sign the message in your wallet...</div>
+        <div class="flow-step" id="step-verify"><div class="spinner"></div> Verifying NFT ownership on-chain...</div>
+        <div class="flow-step" id="step-vpn"><div class="spinner"></div> Provisioning VPN connection...</div>
+      </div>
+
+      <!-- Success state -->
+      <div id="connect-success" class="hidden">
+        <h2 style="margin-bottom: 8px; color: var(--success);">VPN Config Ready</h2>
+        <p id="tier-info" style="color: var(--muted); margin-bottom: 16px;"></p>
+        <div class="config-box">
+          <div class="config-display" id="config-display"></div>
+        </div>
+        <div class="btn-row">
+          <button class="connect-btn" onclick="downloadConfig()">Download Config</button>
+          <button class="connect-btn secondary" onclick="copyConfig()">Copy to Clipboard</button>
+        </div>
+        <p style="color: var(--muted); font-size: 0.85rem; margin-top: 16px;">
+          Import this file into the <a href="https://www.wireguard.com/install/" target="_blank">WireGuard app</a> to activate the VPN.
+        </p>
+      </div>
+
+      <!-- Error state -->
+      <div id="connect-error" class="hidden">
+        <p id="error-msg" style="color: var(--error); margin-bottom: 16px;"></p>
+        <button class="connect-btn secondary" onclick="resetFlow()">Try Again</button>
+      </div>
+    </div>
+  </div>
+
   <section>
     <h2>How It Works</h2>
     <div class="steps">
@@ -196,23 +322,52 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-text">
-          <strong>Sign in with your wallet</strong>
-          <span>The client signs a message with your Ethereum wallet. No passwords, no accounts.</span>
+          <strong>Connect your wallet above</strong>
+          <span>Click "Connect Wallet", sign a message, and the gateway checks your Memes ownership on-chain.</span>
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-text">
-          <strong>Connect to the VPN</strong>
-          <span>A WireGuard tunnel is provisioned automatically. Your traffic is encrypted and routed through the network.</span>
+          <strong>Import into WireGuard</strong>
+          <span>Download the config file and import it into the <a href="https://www.wireguard.com/install/" target="_blank">WireGuard app</a> on any device.</span>
         </div>
       </div>
     </div>
   </section>
 
   <section>
-    <h2>Download</h2>
-    <p style="color: var(--muted); margin-bottom: 16px;">Download the <code>svpn</code> client for your platform:</p>
+    <h2>Access Tiers</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num" style="background: var(--success);">F</div>
+        <div class="step-text">
+          <strong>Free Tier</strong>
+          <span>Hold the project's Memes card (THIS card) and use the VPN for free.</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num" style="background: #2196f3;">P</div>
+        <div class="step-text">
+          <strong>Paid Tier</strong>
+          <span>Hold any other Memes card. Access for a small fee that supports node operators.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Requirements</h2>
+    <ul class="req-list">
+      <li><strong>A Memes card</strong> in your Ethereum wallet (any card from The Memes by 6529)</li>
+      <li><strong>WireGuard app</strong> installed on your device (<a href="https://www.wireguard.com/install/" target="_blank">wireguard.com/install</a>)</li>
+      <li><strong>A browser wallet</strong> like <a href="https://metamask.io" target="_blank">MetaMask</a> (or use the CLI below)</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>CLI Client</h2>
+    <p style="color: var(--muted); margin-bottom: 16px;">Prefer the command line? Download <code>svpn</code> for your platform:</p>
     <div class="downloads">
       <a href="/downloads/svpn-darwin-arm64" class="dl-btn">
         <div><div class="os">macOS</div><div class="arch">Apple Silicon (M1/M2/M3)</div></div>
@@ -227,58 +382,8 @@
         <div><div class="os">Windows</div><div class="arch">x86_64</div></div>
       </a>
     </div>
-  </section>
-
-  <section>
-    <h2>Quick Start</h2>
-
-    <p style="color: var(--muted); margin-bottom: 12px;">1. Generate a wallet (or use an existing one with a Memes card):</p>
-    <div class="code-block">
-      <span class="cmd">./svpn keygen --out wallet.key</span>
-    </div>
-
-    <p style="color: var(--muted); margin-bottom: 12px; margin-top: 20px;">2. Connect to the VPN:</p>
-    <div class="code-block">
+    <div class="code-block" style="margin-top: 16px;">
       <span class="cmd">./svpn connect --gateway https://6529vpn.io --key wallet.key</span>
-    </div>
-
-    <p style="color: var(--muted); margin-bottom: 12px; margin-top: 20px;">3. Activate the WireGuard tunnel:</p>
-    <div class="code-block">
-      <span class="cmd">sudo wg-quick up ./sovereign-vpn.conf</span>
-    </div>
-
-    <p style="color: var(--muted); margin-bottom: 12px; margin-top: 20px;">4. To disconnect:</p>
-    <div class="code-block">
-      <span class="cmd">sudo wg-quick down ./sovereign-vpn.conf</span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Requirements</h2>
-    <ul class="req-list">
-      <li><strong>A Memes card</strong> in your Ethereum wallet (any card from The Memes by 6529)</li>
-      <li><strong>WireGuard</strong> installed on your device (<a href="https://www.wireguard.com/install/">wireguard.com/install</a>)</li>
-      <li><strong>The svpn client</strong> downloaded from above</li>
-    </ul>
-  </section>
-
-  <section>
-    <h2>Access Tiers</h2>
-    <div class="steps">
-      <div class="step">
-        <div class="step-num" style="background: #4caf50;">F</div>
-        <div class="step-text">
-          <strong>Free Tier</strong>
-          <span>Hold the project's Memes card (THIS card) and use the VPN for free.</span>
-        </div>
-      </div>
-      <div class="step">
-        <div class="step-num" style="background: #2196f3;">P</div>
-        <div class="step-text">
-          <strong>Paid Tier</strong>
-          <span>Hold any other Memes card. Access for a small fee that supports node operators.</span>
-        </div>
-      </div>
     </div>
   </section>
 
@@ -295,23 +400,308 @@
 </div>
 
 <script>
-  fetch('/health')
-    .then(r => r.json())
-    .then(data => {
-      const dot = document.getElementById('status-dot');
-      const text = document.getElementById('status-text');
-      if (data.status === 'ok') {
-        dot.className = 'status-dot';
-        text.textContent = `Gateway online \u2022 ${data.active_peers} active peer${data.active_peers !== 1 ? 's' : ''}`;
-      } else {
-        dot.className = 'status-dot offline';
-        text.textContent = 'Gateway offline';
-      }
-    })
-    .catch(() => {
-      document.getElementById('status-dot').className = 'status-dot offline';
-      document.getElementById('status-text').textContent = 'Gateway unreachable';
+// WireGuard key generation using Web Crypto (curve25519 via x25519)
+// We use a pure JS implementation since Web Crypto doesn't support x25519 everywhere
+// This is the standard clamped Curve25519 scalar multiplication
+
+const WG = (() => {
+  // Curve25519 field arithmetic (mod 2^255-19)
+  function gf(init) {
+    const r = new Float64Array(16);
+    if (init) for (let i = 0; i < init.length; i++) r[i] = init[i];
+    return r;
+  }
+  const _0 = gf(), _1 = gf([1]), _9 = gf([9]);
+  const _121665 = gf([0xdb41, 1]);
+
+  function car25519(o) {
+    let c;
+    for (let i = 0; i < 16; i++) {
+      o[i] += 65536;
+      c = Math.floor(o[i] / 65536);
+      o[(i+1) % 16] += c - 1 + 37 * (c-1) * (i===15 ? 1 : 0);
+      o[i] -= c * 65536;
+    }
+  }
+  function sel25519(p, q, b) {
+    const c = ~(b-1);
+    for (let i = 0; i < 16; i++) {
+      const t = c & (p[i] ^ q[i]);
+      p[i] ^= t; q[i] ^= t;
+    }
+  }
+  function A(o, a, b) { for (let i = 0; i < 16; i++) o[i] = a[i] + b[i]; }
+  function Z(o, a, b) { for (let i = 0; i < 16; i++) o[i] = a[i] - b[i]; }
+  function M(o, a, b) {
+    const t = new Float64Array(31);
+    for (let i = 0; i < 16; i++) for (let j = 0; j < 16; j++) t[i+j] += a[i] * b[j];
+    for (let i = 0; i < 15; i++) t[i] += 38 * t[i+16];
+    for (let i = 0; i < 16; i++) o[i] = t[i];
+    car25519(o); car25519(o);
+  }
+  function S(o, a) { M(o, a, a); }
+  function inv25519(o, a) {
+    const c = gf();
+    for (let i = 0; i < 16; i++) c[i] = a[i];
+    for (let i = 253; i >= 0; i--) {
+      S(c, c);
+      if (i !== 2 && i !== 4) M(c, c, a);
+    }
+    for (let i = 0; i < 16; i++) o[i] = c[i];
+  }
+  function pack25519(o, n) {
+    const m = gf(), t = gf();
+    for (let i = 0; i < 16; i++) t[i] = n[i];
+    car25519(t); car25519(t); car25519(t);
+    for (let j = 0; j < 2; j++) {
+      m[0] = t[0] - 0xffed;
+      for (let i = 1; i < 15; i++) { m[i] = t[i] - 0xffff - ((m[i-1] >> 16) & 1); m[i-1] &= 0xffff; }
+      m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
+      const b = (m[15] >> 16) & 1;
+      m[14] &= 0xffff;
+      sel25519(t, m, 1-b);
+    }
+    for (let i = 0; i < 16; i++) { o[2*i] = t[i] & 0xff; o[2*i+1] = t[i] >> 8; }
+  }
+  function scalarmult(q, n, p) {
+    const a = gf(), b = gf(), c = gf(), d = gf(), e = gf(), f = gf();
+    for (let i = 0; i < 16; i++) { b[i] = p[i]; d[i] = 0; a[i] = 0; c[i] = 0; }
+    a[0] = 1; d[0] = 1;
+    for (let i = 254; i >= 0; i--) {
+      const r = (n[i>>>3] >>> (i&7)) & 1;
+      sel25519(a, b, r); sel25519(c, d, r);
+      A(e, a, c); Z(a, a, c); A(c, b, d); Z(b, b, d);
+      S(d, e); S(f, a); M(a, c, a); M(c, b, e);
+      A(e, a, c); Z(a, a, c); S(b, a); Z(c, d, f);
+      M(a, c, _121665); A(a, a, d); M(c, c, a); M(a, d, f); M(d, b, p); S(b, e);
+      sel25519(a, b, r); sel25519(c, d, r);
+    }
+    for (let i = 0; i < 16; i++) { q[2*i] = a[i]; q[2*i+1] = c[i]; }
+  }
+  function scalarbase(q, n) {
+    const p = new Uint8Array(32);
+    p[0] = 9;
+    const qgf = new Float64Array(32);
+    const ngf = n;
+    scalarmult(qgf, ngf, gf([9]));
+    // Actually let's use the simpler approach
+    const a = gf(), b = gf(_9), c = gf(), d = gf([1]), e = gf(), f = gf();
+    a[0] = 1;
+    for (let i = 254; i >= 0; i--) {
+      const r = (n[i>>>3] >>> (i&7)) & 1;
+      sel25519(a, b, r); sel25519(c, d, r);
+      A(e, a, c); Z(a, a, c); A(c, b, d); Z(b, b, d);
+      S(d, e); S(f, a); M(a, c, a); M(c, b, e);
+      A(e, a, c); Z(a, a, c); S(b, a); Z(c, d, f);
+      M(a, c, _121665); A(a, a, d); M(c, c, a); M(a, d, f); M(d, b, gf([9])); S(b, e);
+      sel25519(a, b, r); sel25519(c, d, r);
+    }
+    const t = gf();
+    inv25519(t, c);
+    M(a, a, t);
+    pack25519(q, a);
+  }
+
+  function generateKeyPair() {
+    const privateKey = new Uint8Array(32);
+    crypto.getRandomValues(privateKey);
+    // Clamp
+    privateKey[0] &= 248;
+    privateKey[31] &= 127;
+    privateKey[31] |= 64;
+
+    const publicKey = new Uint8Array(32);
+    scalarbase(publicKey, privateKey);
+
+    return {
+      privateKey: btoa(String.fromCharCode(...privateKey)),
+      publicKey: btoa(String.fromCharCode(...publicKey))
+    };
+  }
+
+  return { generateKeyPair };
+})();
+
+let generatedConfig = '';
+let generatedKeys = null;
+
+async function startConnect() {
+  if (!window.ethereum) {
+    document.getElementById('no-wallet-msg').classList.remove('hidden');
+    return;
+  }
+
+  const initial = document.getElementById('connect-initial');
+  const flow = document.getElementById('connect-flow');
+  const success = document.getElementById('connect-success');
+  const error = document.getElementById('connect-error');
+
+  initial.classList.add('hidden');
+  flow.classList.remove('hidden');
+  success.classList.add('hidden');
+  error.classList.add('hidden');
+
+  // Reset steps
+  const steps = ['step-wallet', 'step-challenge', 'step-sign', 'step-verify', 'step-vpn'];
+  steps.forEach(id => {
+    const el = document.getElementById(id);
+    el.className = 'flow-step';
+    el.querySelector('div').className = 'spinner';
+  });
+
+  try {
+    // Step 1: Connect wallet
+    setStepActive('step-wallet');
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const address = accounts[0];
+    setStepDone('step-wallet', `Connected: ${address.slice(0,6)}...${address.slice(-4)}`);
+
+    // Step 2: Get challenge
+    setStepActive('step-challenge');
+    const challengeResp = await fetch('/auth/challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address })
     });
+    if (!challengeResp.ok) {
+      const err = await challengeResp.json();
+      throw new Error(err.error || 'Failed to get challenge');
+    }
+    const challenge = await challengeResp.json();
+    setStepDone('step-challenge', 'Challenge received');
+
+    // Step 3: Sign message
+    setStepActive('step-sign');
+    const signature = await window.ethereum.request({
+      method: 'personal_sign',
+      params: [challenge.message, address]
+    });
+    setStepDone('step-sign', 'Message signed');
+
+    // Step 4: Verify signature + check NFT
+    setStepActive('step-verify');
+    const verifyResp = await fetch('/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: challenge.message, signature })
+    });
+    const verifyData = await verifyResp.json();
+
+    if (verifyData.tier === 'denied') {
+      throw new Error('No Memes card found in this wallet. You need at least one card from The Memes by 6529.');
+    }
+    if (verifyResp.status === 403) {
+      throw new Error(verifyData.error || 'Access denied');
+    }
+    if (!verifyResp.ok) {
+      throw new Error(verifyData.error || 'Verification failed');
+    }
+    setStepDone('step-verify', `Verified: ${verifyData.tier} tier`);
+
+    // Step 5: Generate WireGuard keys and connect
+    setStepActive('step-vpn');
+    generatedKeys = WG.generateKeyPair();
+
+    const connectResp = await fetch('/vpn/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_token: verifyData.address,
+        public_key: generatedKeys.publicKey
+      })
+    });
+    if (!connectResp.ok) {
+      const err = await connectResp.json();
+      throw new Error(err.error || 'Failed to provision VPN');
+    }
+    const vpnData = await connectResp.json();
+    setStepDone('step-vpn', 'VPN provisioned');
+
+    // Build config
+    generatedConfig = [
+      '[Interface]',
+      `PrivateKey = ${generatedKeys.privateKey}`,
+      `Address = ${vpnData.client_address}`,
+      `DNS = ${vpnData.dns}`,
+      '',
+      '[Peer]',
+      `PublicKey = ${vpnData.server_public_key}`,
+      `Endpoint = ${vpnData.server_endpoint}`,
+      `AllowedIPs = 0.0.0.0/0, ::/0`,
+      'PersistentKeepalive = 25'
+    ].join('\n');
+
+    // Show success
+    setTimeout(() => {
+      flow.classList.add('hidden');
+      success.classList.remove('hidden');
+      document.getElementById('config-display').textContent = generatedConfig;
+      document.getElementById('tier-info').textContent =
+        `Access tier: ${vpnData.tier} \u2022 Expires: ${new Date(vpnData.expires_at).toLocaleString()}`;
+    }, 500);
+
+  } catch (err) {
+    console.error(err);
+    flow.classList.add('hidden');
+    error.classList.remove('hidden');
+    document.getElementById('error-msg').textContent = err.message || 'Something went wrong';
+  }
+}
+
+function setStepActive(id) {
+  const el = document.getElementById(id);
+  el.className = 'flow-step active';
+}
+function setStepDone(id, text) {
+  const el = document.getElementById(id);
+  el.className = 'flow-step done';
+  el.innerHTML = `<span class="checkmark"></span> ${text}`;
+}
+
+function downloadConfig() {
+  const blob = new Blob([generatedConfig], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '6529vpn.conf';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function copyConfig() {
+  navigator.clipboard.writeText(generatedConfig).then(() => {
+    const btn = event.target;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 2000);
+  });
+}
+
+function resetFlow() {
+  document.getElementById('connect-initial').classList.remove('hidden');
+  document.getElementById('connect-flow').classList.add('hidden');
+  document.getElementById('connect-success').classList.add('hidden');
+  document.getElementById('connect-error').classList.add('hidden');
+}
+
+// Health check
+fetch('/health')
+  .then(r => r.json())
+  .then(data => {
+    const dot = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    if (data.status === 'ok') {
+      dot.className = 'status-dot';
+      text.textContent = `Gateway online \u2022 ${data.active_peers} active peer${data.active_peers !== 1 ? 's' : ''}`;
+    } else {
+      dot.className = 'status-dot offline';
+      text.textContent = 'Gateway offline';
+    }
+  })
+  .catch(() => {
+    document.getElementById('status-dot').className = 'status-dot offline';
+    document.getElementById('status-text').textContent = 'Gateway unreachable';
+  });
 </script>
 
 </body>
