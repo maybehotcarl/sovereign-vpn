@@ -172,3 +172,127 @@ footer a:hover { color: var(--accent); }
 .wallet-connect-wrapper {
   display: flex; justify-content: center; margin: 20px 0;
 }
+
+/* Session Dashboard */
+.dashboard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 48px 0;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-header.active {
+  background: rgba(78, 205, 196, 0.08);
+  border-bottom-color: var(--accent-dim);
+}
+
+.dashboard-header.expired {
+  background: rgba(244, 67, 54, 0.08);
+  border-bottom-color: rgba(244, 67, 54, 0.3);
+}
+
+.dashboard-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.dashboard-tier {
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 4px 12px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 12px;
+}
+
+.dashboard-body {
+  padding: 24px;
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat {
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.stat-value.mono {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.dashboard-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.btn-disconnect {
+  display: inline-block;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--error);
+  font-weight: 700;
+  font-size: 0.85rem;
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.btn-disconnect:hover {
+  background: rgba(244, 67, 54, 0.1);
+}
+
+.btn-disconnect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+  .dashboard-stats {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-header {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .dashboard-actions {
+    flex-direction: column;
+  }
+}

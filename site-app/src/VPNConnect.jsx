@@ -21,7 +21,7 @@ const PAID_STEPS = [
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
 
-export default function VPNConnect({ gatewayUrl = '' }) {
+export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { writeContractAsync } = useWriteContract();
@@ -215,6 +215,24 @@ export default function VPNConnect({ gatewayUrl = '' }) {
       'PersistentKeepalive = 25',
     ].join('\n');
 
+    // Save session for the dashboard
+    if (onSessionCreated) {
+      onSessionCreated({
+        address: vData.address,
+        tier: vpnData.tier,
+        expiresAt: vpnData.expires_at,
+        serverEndpoint: vpnData.server_endpoint,
+        clientAddress: vpnData.client_address,
+        serverPublicKey: vpnData.server_public_key,
+        gatewayUrl,
+        vpnConfig: config,
+        connectedAt: new Date().toISOString(),
+        publicKey: keys.publicKey,
+      });
+      return; // parent will switch to dashboard view
+    }
+
+    // Fallback: show config inline (if no dashboard handler)
     setVpnConfig(config);
     setTierInfo(`Access tier: ${vpnData.tier} \u2022 Expires: ${new Date(vpnData.expires_at).toLocaleString()}`);
     setTimeout(() => setPhase('success'), 400);
