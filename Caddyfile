@@ -1,0 +1,28 @@
+:3000 {
+	# API routes — reverse proxy to gateway container (matched first)
+	handle /auth/* {
+		reverse_proxy localhost:8080
+	}
+	handle /vpn/* {
+		reverse_proxy localhost:8080
+	}
+	handle /session/* {
+		reverse_proxy localhost:8080
+	}
+	handle /subscription/* {
+		reverse_proxy localhost:8080
+	}
+	handle /nodes* {
+		reverse_proxy localhost:8080
+	}
+	handle /health {
+		reverse_proxy localhost:8080
+	}
+
+	# Everything else — static frontend with SPA fallback
+	handle {
+		root * /home/maybe/sovereign-vpn/site-app/dist
+		try_files {path} /index.html
+		file_server
+	}
+}
