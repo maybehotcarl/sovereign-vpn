@@ -107,5 +107,13 @@ if [ -n "${NODE_REGISTRY:-}" ]; then
     fi
 fi
 
+# Optional: ZK proof verification
+if [ -n "${ZK_API_URL:-}" ]; then
+    ARGS+=(--zk-api-url "$ZK_API_URL")
+    if [ -n "${ZK_API_KEY:-}" ]; then
+        ARGS+=(--zk-api-key "$ZK_API_KEY")
+    fi
+fi
+
 echo "  Starting gateway..."
 exec gateway "${ARGS[@]}"

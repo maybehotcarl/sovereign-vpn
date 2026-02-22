@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
@@ -17,6 +18,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
 // Server is the Sovereign VPN gateway.
@@ -30,6 +32,8 @@ type Server struct {
 	rep        *rep6529.Checker
 	userRep    *rep6529.Checker
 	sessionMgr *sessionmgr.Manager
+	zkClient   *zkverify.Client
+	thisCardID int64
 	mux        *http.ServeMux
 	corsOrigin string
 }
@@ -95,6 +99,16 @@ func (s *Server) SetSessionManager(m *sessionmgr.Manager) {
 // SetCORSOrigin configures the allowed CORS origin for cross-origin requests.
 func (s *Server) SetCORSOrigin(origin string) {
 	s.corsOrigin = origin
+}
+
+// SetZKClient configures the ZK API client for proof verification.
+func (s *Server) SetZKClient(c *zkverify.Client) {
+	s.zkClient = c
+}
+
+// SetThisCardID configures the token ID that grants free tier via ZK proof.
+func (s *Server) SetThisCardID(id int64) {
+	s.thisCardID = id
 }
 
 // Handler returns the HTTP handler.
@@ -193,36 +207,84 @@ type VerifyResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// POST /auth/verify -- verify SIWE signature + check NFT -> create session
-// Request: { "message": "...", "signature": "0x..." }
+// zkProofPayload is an optional ZK proof included in the verify request.
+type zkProofPayload struct {
+	ProofType     string   `json:"proof_type"`
+	Proof         any      `json:"proof"`
+	PublicSignals []string `json:"public_signals"`
+}
+
+// verifyRequest extends the SIWE signed message with an optional ZK proof.
+type verifyRequest struct {
+	Message   string          `json:"message"`
+	Signature string          `json:"signature"`
+	ZKProof   *zkProofPayload `json:"zk_proof,omitempty"`
+}
+
+// POST /auth/verify -- verify SIWE signature + check NFT (or ZK proof) -> create session
+// Request: { "message": "...", "signature": "0x...", "zk_proof": { ... } }
 // Response: { "address": "0x...", "tier": "free|paid|denied", "expires_at": "..." }
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
-	var signed siwe.SignedMessage
-	if err := json.NewDecoder(r.Body).Decode(&signed); err != nil {
+	var req verifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if signed.Message == "" || signed.Signature == "" {
+	if req.Message == "" || req.Signature == "" {
 		writeError(w, http.StatusBadRequest, "message and signature are required")
 		return
 	}
 
 	// Step 1: Verify SIWE signature, recover wallet address
-	auth, err := s.siwe.Verify(&signed)
+	signed := &siwe.SignedMessage{Message: req.Message, Signature: req.Signature}
+	auth, err := s.siwe.Verify(signed)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
-	// Step 2: Check NFT access tier
-	result, err := s.checker.Check(r.Context(), auth.Address)
-	if err != nil {
-		log.Printf("Error checking NFT access for %s: %v", auth.Address.Hex(), err)
-		writeError(w, http.StatusInternalServerError, "failed to check NFT access")
-		return
+	// Step 2: Determine access tier — ZK proof path or on-chain path
+	var result nftcheck.CheckResult
+
+	if req.ZKProof != nil && s.zkClient != nil {
+		// ZK path: forward proof to ZK API for verification
+		zkResult, err := s.zkClient.VerifyProof(r.Context(), zkverify.ProofPayload{
+			ProofType:     req.ZKProof.ProofType,
+			Proof:         req.ZKProof.Proof,
+			PublicSignals: req.ZKProof.PublicSignals,
+		})
+		if err != nil {
+			log.Printf("ZK API error for %s: %v", auth.Address.Hex(), err)
+			writeError(w, http.StatusBadGateway, "ZK verification service unavailable")
+			return
+		}
+
+		if !zkResult.Valid {
+			log.Printf("ZK proof invalid for %s: %s", auth.Address.Hex(), zkResult.Reason)
+			writeJSON(w, http.StatusForbidden, VerifyResponse{
+				Address: auth.Address.Hex(),
+				Tier:    nftcheck.TierDenied.String(),
+			})
+			return
+		}
+
+		// Determine tier from public signals
+		result = nftcheck.CheckResult{
+			Tier:      s.tierFromZKProof(req.ZKProof),
+			CheckedAt: time.Now(),
+		}
+		log.Printf("ZK proof valid for %s: type=%s tier=%s", auth.Address.Hex(), req.ZKProof.ProofType, result.Tier)
+	} else {
+		// On-chain path: existing NFT check
+		result, err = s.checker.Check(r.Context(), auth.Address)
+		if err != nil {
+			log.Printf("Error checking NFT access for %s: %v", auth.Address.Hex(), err)
+			writeError(w, http.StatusInternalServerError, "failed to check NFT access")
+			return
+		}
 	}
 
-	// Step 3: Deny if no Memes card
+	// Step 3: Deny if no access
 	if result.Tier == nftcheck.TierDenied {
 		writeJSON(w, http.StatusForbidden, VerifyResponse{
 			Address: auth.Address.Hex(),
@@ -263,6 +325,23 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		Tier:      result.Tier.String(),
 		ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// tierFromZKProof determines the access tier from a validated ZK proof.
+// For card_ownership: publicSignals[1] is cardId — if it matches thisCardID → free, else → paid.
+// For tdh_range: publicSignals[1] is bucketMin — any valid proof → paid (or free if configured).
+// Default: any valid proof → paid.
+func (s *Server) tierFromZKProof(proof *zkProofPayload) nftcheck.AccessTier {
+	if proof.ProofType == "card_ownership" && len(proof.PublicSignals) >= 2 {
+		cardID, err := strconv.ParseInt(proof.PublicSignals[1], 10, 64)
+		if err == nil && s.thisCardID > 0 && cardID == s.thisCardID {
+			return nftcheck.TierFree
+		}
+		return nftcheck.TierPaid
+	}
+
+	// tdh_range or any other proof type: valid proof = paid access
+	return nftcheck.TierPaid
 }
 
 // =========================================================================

@@ -22,6 +22,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
 func main() {
@@ -75,6 +76,10 @@ func main() {
 	// SessionManager flags
 	sessionManagerContract := flag.String("session-manager", "", "SessionManager contract address (enables on-chain session tracking)")
 	sessionKey := flag.String("session-key", "", "Private key hex for SessionManager txs (contract owner)")
+
+	// ZK verification flags
+	zkAPIURL := flag.String("zk-api-url", "", "ZK service API URL (enables ZK proof verification)")
+	zkAPIKey := flag.String("zk-api-key", "", "ZK service API key")
 
 	flag.Parse()
 
@@ -279,6 +284,14 @@ func main() {
 		}
 	}
 
+	// Configure ZK verification if API URL is provided
+	if *zkAPIURL != "" {
+		zkClient := zkverify.New(*zkAPIURL, *zkAPIKey)
+		srv.SetZKClient(zkClient)
+		srv.SetThisCardID(*thisCardID)
+		log.Printf("ZK verification enabled: %s", *zkAPIURL)
+	}
+
 	// Start transfer event watcher if WebSocket endpoint is configured
 	if *ethWS != "" && cfg.MemesContract != "" {
 		revoker := server.NewRevoker(srv)
@@ -308,6 +321,9 @@ func main() {
 	}
 	if *sessionManagerContract != "" {
 		log.Printf("  SessionMgr:    %s", *sessionManagerContract)
+	}
+	if *zkAPIURL != "" {
+		log.Printf("  ZK API:        %s", *zkAPIURL)
 	}
 
 	// Graceful shutdown
