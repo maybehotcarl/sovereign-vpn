@@ -107,6 +107,11 @@ if [ -n "${NODE_REGISTRY:-}" ]; then
     fi
 fi
 
+# Optional: subscription manager (time-based subscriptions)
+if [ -n "${SUBSCRIPTION_MANAGER:-}" ]; then
+    ARGS+=(--subscription-manager "$SUBSCRIPTION_MANAGER")
+fi
+
 # Optional: ZK proof verification
 if [ -n "${ZK_API_URL:-}" ]; then
     ARGS+=(--zk-api-url "$ZK_API_URL")

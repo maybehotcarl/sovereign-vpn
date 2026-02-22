@@ -17,6 +17,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/subscriptionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
@@ -32,6 +33,7 @@ type Server struct {
 	rep        *rep6529.Checker
 	userRep    *rep6529.Checker
 	sessionMgr *sessionmgr.Manager
+	subMgr     *subscriptionmgr.Manager
 	zkClient   *zkverify.Client
 	thisCardID int64
 	mux        *http.ServeMux
@@ -64,6 +66,9 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	// Session info (public — returns contract/pricing for frontend)
 	s.mux.HandleFunc("GET /session/info", s.handleSessionInfo)
 
+	// Subscription info (public — returns tiers + contract address for frontend)
+	s.mux.HandleFunc("GET /subscription/tiers", s.handleSubscriptionTiers)
+
 	// Node discovery endpoint (public)
 	s.mux.HandleFunc("GET /nodes", s.handleListNodes)
 	s.mux.HandleFunc("GET /nodes/region", s.handleListNodesByRegion)
@@ -94,6 +99,11 @@ func (s *Server) SetUserRepChecker(r *rep6529.Checker) {
 // SetSessionManager configures the on-chain session manager.
 func (s *Server) SetSessionManager(m *sessionmgr.Manager) {
 	s.sessionMgr = m
+}
+
+// SetSubscriptionManager configures the on-chain subscription manager.
+func (s *Server) SetSubscriptionManager(m *subscriptionmgr.Manager) {
+	s.subMgr = m
 }
 
 // SetCORSOrigin configures the allowed CORS origin for cross-origin requests.
@@ -364,6 +374,26 @@ func (s *Server) handleSessionInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// GET /subscription/tiers — returns subscription tier list + contract address
+// for the frontend to construct subscribe transactions.
+func (s *Server) handleSubscriptionTiers(w http.ResponseWriter, r *http.Request) {
+	if s.subMgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "subscription manager not configured")
+		return
+	}
+	tiers, err := s.subMgr.GetTiers(r.Context())
+	if err != nil {
+		log.Printf("Error getting subscription tiers: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to read tiers from contract")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"contract": s.subMgr.ContractAddr(),
+		"chain_id": s.subMgr.ChainID(),
+		"tiers":    tiers,
+	})
+}
+
 // =========================================================================
 //                          VPN HANDLERS
 // =========================================================================
@@ -411,36 +441,63 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For paid tier, verify on-chain payment before provisioning
-	if session.Tier == nftcheck.TierPaid && s.sessionMgr != nil {
-		sessionID, err := s.sessionMgr.GetActiveSessionID(r.Context(), session.Address)
-		if err != nil || sessionID == 0 {
-			writeError(w, http.StatusPaymentRequired, "on-chain payment required for paid tier")
-			return
+	// For paid tier, check subscription first, then fall back to 24h session
+	if session.Tier == nftcheck.TierPaid {
+		// Path 1: Check active subscription
+		if s.subMgr != nil {
+			sub, err := s.subMgr.GetSubscription(r.Context(), session.Address)
+			if err == nil && sub.ExpiresAt > uint64(time.Now().Unix()) {
+				remaining := time.Duration(sub.ExpiresAt-uint64(time.Now().Unix())) * time.Second
+				peerCfg, err := s.wg.AddPeer(req.PublicKey, remaining)
+				if err != nil {
+					log.Printf("Error adding WireGuard peer: %v", err)
+					writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
+					return
+				}
+				expiresAt := time.Now().Add(remaining)
+				log.Printf("VPN connected (subscription): %s -> %s (remaining=%s)", session.Address.Hex(), peerCfg.ClientAddress, remaining)
+				writeJSON(w, http.StatusOK, ConnectResponse{
+					ServerPublicKey: peerCfg.ServerPublicKey,
+					ServerEndpoint:  peerCfg.ServerEndpoint,
+					ClientAddress:   peerCfg.ClientAddress,
+					DNS:             peerCfg.DNS,
+					AllowedIPs:      peerCfg.AllowedIPs,
+					ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
+					Tier:            "subscription",
+				})
+				return
+			}
 		}
-		onChain, err := s.sessionMgr.GetSession(r.Context(), sessionID)
-		if err != nil || onChain.Payment.Sign() == 0 {
-			writeError(w, http.StatusPaymentRequired, "on-chain payment not found")
-			return
+
+		// Path 2: Fall back to 24h session
+		if s.sessionMgr != nil {
+			sessionID, err := s.sessionMgr.GetActiveSessionID(r.Context(), session.Address)
+			if err == nil && sessionID != 0 {
+				onChain, err := s.sessionMgr.GetSession(r.Context(), sessionID)
+				if err == nil && onChain.Payment.Sign() > 0 {
+					peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Duration(onChain.Duration)*time.Second)
+					if err != nil {
+						log.Printf("Error adding WireGuard peer: %v", err)
+						writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
+						return
+					}
+					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
+					log.Printf("VPN connected (paid): %s -> %s (duration=%ds)", session.Address.Hex(), peerCfg.ClientAddress, onChain.Duration)
+					writeJSON(w, http.StatusOK, ConnectResponse{
+						ServerPublicKey: peerCfg.ServerPublicKey,
+						ServerEndpoint:  peerCfg.ServerEndpoint,
+						ClientAddress:   peerCfg.ClientAddress,
+						DNS:             peerCfg.DNS,
+						AllowedIPs:      peerCfg.AllowedIPs,
+						ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
+						Tier:            session.Tier.String(),
+					})
+					return
+				}
+			}
 		}
-		// Use on-chain duration for WireGuard peer TTL
-		peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Duration(onChain.Duration)*time.Second)
-		if err != nil {
-			log.Printf("Error adding WireGuard peer: %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
-			return
-		}
-		expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
-		log.Printf("VPN connected (paid): %s -> %s (duration=%ds)", session.Address.Hex(), peerCfg.ClientAddress, onChain.Duration)
-		writeJSON(w, http.StatusOK, ConnectResponse{
-			ServerPublicKey: peerCfg.ServerPublicKey,
-			ServerEndpoint:  peerCfg.ServerEndpoint,
-			ClientAddress:   peerCfg.ClientAddress,
-			DNS:             peerCfg.DNS,
-			AllowedIPs:      peerCfg.AllowedIPs,
-			ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
-			Tier:            session.Tier.String(),
-		})
+
+		writeError(w, http.StatusPaymentRequired, "on-chain payment required for paid tier")
 		return
 	}
 
@@ -479,9 +536,18 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Close on-chain session (fire-and-forget)
-	if s.sessionMgr != nil {
-		s.sessionMgr.CloseSessionFor(common.Address(parseAddress(req.SessionToken)))
+	// Close on-chain session (fire-and-forget) — skip for subscribers
+	// (subscription stays valid; user can reconnect freely)
+	addr := common.Address(parseAddress(req.SessionToken))
+	isSubscriber := false
+	if s.subMgr != nil {
+		active, err := s.subMgr.HasActiveSubscription(r.Context(), addr)
+		if err == nil && active {
+			isSubscriber = true
+		}
+	}
+	if !isSubscriber && s.sessionMgr != nil {
+		s.sessionMgr.CloseSessionFor(addr)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})

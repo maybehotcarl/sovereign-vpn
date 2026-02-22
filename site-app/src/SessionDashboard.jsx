@@ -3,12 +3,19 @@ import { useState, useEffect, useCallback } from 'react';
 function formatTimeLeft(expiresAt) {
   const diff = new Date(expiresAt) - Date.now();
   if (diff <= 0) return null;
-  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
   const mins = Math.floor((diff % 3600000) / 60000);
   const secs = Math.floor((diff % 60000) / 1000);
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
   if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
   if (mins > 0) return `${mins}m ${secs}s`;
   return `${secs}s`;
+}
+
+function daysRemaining(expiresAt) {
+  const diff = new Date(expiresAt) - Date.now();
+  return diff / 86400000;
 }
 
 export default function SessionDashboard({ session, onDisconnect, onReconnect }) {
@@ -18,6 +25,8 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
   const [copyLabel, setCopyLabel] = useState('Copy');
 
   const expired = !timeLeft;
+  const isSubscription = session.tier === 'subscription';
+  const showRenew = isSubscription && !expired && daysRemaining(session.expiresAt) < 7;
 
   // Live countdown
   useEffect(() => {
@@ -68,12 +77,12 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
         <div className="dashboard-header expired">
           <div className="dashboard-status">
             <div className="status-dot offline" />
-            <span>Session Expired</span>
+            <span>{isSubscription ? 'Subscription Expired' : 'Session Expired'}</span>
           </div>
         </div>
         <div className="dashboard-body" style={{ textAlign: 'center' }}>
           <p style={{ color: 'var(--muted)', marginBottom: 20 }}>
-            Your VPN session has expired. Reconnect to get a new configuration.
+            Your VPN {isSubscription ? 'subscription' : 'session'} has expired. Reconnect to get a new configuration.
           </p>
           <div className="btn-row">
             <button className="btn-primary" onClick={onReconnect}>Reconnect</button>
@@ -92,7 +101,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
           <div className="status-dot" />
           <span>VPN Connected</span>
         </div>
-        <div className="dashboard-tier">{session.tier}</div>
+        <div className="dashboard-tier">{isSubscription ? 'Subscription' : session.tier}</div>
       </div>
 
       <div className="dashboard-body">
@@ -112,6 +121,15 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
         </div>
 
         <div className="dashboard-actions">
+          {showRenew && (
+            <button
+              className="btn-primary"
+              onClick={onReconnect}
+              style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+            >
+              Renew
+            </button>
+          )}
           <button
             className="btn-secondary"
             onClick={() => setShowConfig(!showConfig)}

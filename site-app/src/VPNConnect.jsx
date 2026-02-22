@@ -3,7 +3,7 @@ import { useAccount, useSignMessage, useWriteContract, useWaitForTransactionRece
 import { formatEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { generateKeyPair } from './wgkeys';
-import { SESSION_MANAGER_ADDRESS, SESSION_MANAGER_ABI } from './contracts';
+import { SESSION_MANAGER_ADDRESS, SESSION_MANAGER_ABI, SUBSCRIPTION_MANAGER_ABI } from './contracts';
 
 const FREE_STEPS = [
   { id: 'challenge', label: 'Requesting challenge...' },
@@ -20,6 +20,23 @@ const PAID_STEPS = [
   { id: 'confirm', label: 'Waiting for transaction confirmation...' },
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
+
+const TIER_LABELS = {
+  '24h': '24 Hours',
+  '7d': '7 Days',
+  '30d': '30 Days',
+  '90d': '90 Days',
+  '365d': '365 Days',
+};
+
+function formatDuration(seconds) {
+  const days = Math.floor(seconds / 86400);
+  if (days >= 365) return '365d';
+  if (days >= 90) return '90d';
+  if (days >= 30) return '30d';
+  if (days >= 7) return '7d';
+  return '24h';
+}
 
 export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const { address, isConnected } = useAccount();
@@ -39,6 +56,10 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const [paymentInfo, setPaymentInfo] = useState(null); // { node, duration, costWei, costEth }
   const [verifyData, setVerifyData] = useState(null);
   const [paymentTxHash, setPaymentTxHash] = useState(null);
+
+  // Tier picker state
+  const [selectedTier, setSelectedTier] = useState(null); // '24h' or tier object from API
+  const [tierOptions, setTierOptions] = useState(null); // { session: {...}, subscriptions: [...] }
 
   // Watch for tx confirmation
   const { isSuccess: txConfirmed, isError: txFailed } = useWaitForTransactionReceipt({
@@ -69,6 +90,8 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setPaymentInfo(null);
     setVerifyData(null);
     setPaymentTxHash(null);
+    setSelectedTier(null);
+    setTierOptions(null);
 
     try {
       // Step 0: Get challenge
@@ -109,30 +132,50 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       }
       markDone(2, `Verified: ${vData.tier} tier`);
 
-      // If paid tier, pause for payment
+      // If paid tier, fetch pricing and show tier picker
       if (vData.tier === 'paid' && SESSION_MANAGER_ADDRESS) {
         setSteps(PAID_STEPS);
         setVerifyData(vData);
 
-        // Fetch session info from gateway
-        const infoResp = await fetch(`${gatewayUrl}/session/info`);
-        if (!infoResp.ok) {
+        // Fetch session info and subscription tiers in parallel
+        const [sessionResp, subResp] = await Promise.all([
+          fetch(`${gatewayUrl}/session/info`),
+          fetch(`${gatewayUrl}/subscription/tiers`).catch(() => null),
+        ]);
+
+        if (!sessionResp.ok) {
           throw new Error('Failed to fetch session pricing');
         }
-        const info = await infoResp.json();
-        const costEth = formatEther(BigInt(info.cost_wei));
+        const sessionInfo = await sessionResp.json();
 
-        setPaymentInfo({
-          node: info.node_operator,
-          duration: info.duration_seconds,
-          costWei: info.cost_wei,
-          costEth,
-          contract: info.contract,
-          chainId: info.chain_id,
+        let subTiers = null;
+        if (subResp && subResp.ok) {
+          subTiers = await subResp.json();
+        }
+
+        setTierOptions({
+          session: {
+            node: sessionInfo.node_operator,
+            duration: sessionInfo.duration_seconds,
+            costWei: sessionInfo.cost_wei,
+            costEth: formatEther(BigInt(sessionInfo.cost_wei)),
+            contract: sessionInfo.contract,
+            chainId: sessionInfo.chain_id,
+          },
+          subscriptions: subTiers ? subTiers.tiers.map(t => ({
+            id: t.id,
+            durationKey: formatDuration(t.duration_seconds),
+            duration: t.duration_seconds,
+            costWei: t.price_wei,
+            costEth: formatEther(BigInt(t.price_wei)),
+            contract: subTiers.contract,
+            chainId: subTiers.chain_id,
+          })) : [],
         });
+
         setCurrentStep(3); // payment step
         setPhase('payment');
-        return; // pause — user clicks "Pay & Connect"
+        return; // pause — user picks a tier and clicks "Pay & Connect"
       }
 
       // Free tier: continue directly to VPN provisioning
@@ -146,18 +189,34 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   }, [address, signMessageAsync, gatewayUrl]);
 
   const handlePayAndConnect = useCallback(async () => {
-    if (!paymentInfo || !verifyData) return;
+    if (!selectedTier || !verifyData || !tierOptions) return;
 
     try {
       setPhase('running');
-      // Step 3: Send payment tx
-      const hash = await writeContractAsync({
-        address: paymentInfo.contract,
-        abi: SESSION_MANAGER_ABI,
-        functionName: 'openSession',
-        args: [paymentInfo.node, BigInt(paymentInfo.duration)],
-        value: BigInt(paymentInfo.costWei),
-      });
+
+      let hash;
+      if (selectedTier === '24h') {
+        // 24h session via SessionManager
+        const info = tierOptions.session;
+        hash = await writeContractAsync({
+          address: info.contract,
+          abi: SESSION_MANAGER_ABI,
+          functionName: 'openSession',
+          args: [info.node, BigInt(info.duration)],
+          value: BigInt(info.costWei),
+        });
+      } else {
+        // Subscription via SubscriptionManager
+        const tier = tierOptions.subscriptions.find(t => t.durationKey === selectedTier);
+        hash = await writeContractAsync({
+          address: tier.contract,
+          abi: SUBSCRIPTION_MANAGER_ABI,
+          functionName: 'subscribe',
+          args: [tierOptions.session.node, tier.id],
+          value: BigInt(tier.costWei),
+        });
+      }
+
       markDone(3, 'Payment sent');
 
       // Step 4: Wait for confirmation
@@ -169,7 +228,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Payment failed');
       setPhase('error');
     }
-  }, [paymentInfo, verifyData, writeContractAsync]);
+  }, [selectedTier, tierOptions, verifyData, writeContractAsync]);
 
   const continueAfterPayment = useCallback(async () => {
     try {
@@ -265,7 +324,19 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setPaymentInfo(null);
     setVerifyData(null);
     setPaymentTxHash(null);
+    setSelectedTier(null);
+    setTierOptions(null);
   };
+
+  // Build tier options for the picker
+  const allTierOptions = tierOptions ? [
+    { key: '24h', label: '24 Hours', price: tierOptions.session.costEth },
+    ...tierOptions.subscriptions.map(t => ({
+      key: t.durationKey,
+      label: TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`,
+      price: t.costEth,
+    })),
+  ] : [];
 
   return (
     <div className="connect-section">
@@ -319,8 +390,8 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
               );
             })}
 
-            {/* Payment card — shown when paused for payment */}
-            {phase === 'payment' && paymentInfo && (
+            {/* Tier picker — shown when paused for payment */}
+            {phase === 'payment' && tierOptions && (
               <div style={{
                 marginTop: 20,
                 padding: '20px',
@@ -328,15 +399,34 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                 borderRadius: 8,
                 background: 'var(--card-bg, #1a1a2e)',
               }}>
-                <h3 style={{ marginBottom: 8 }}>24 Hour VPN Session</h3>
-                <p style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: 4 }}>
-                  {paymentInfo.costEth} ETH
-                </p>
+                <h3 style={{ marginBottom: 12 }}>Choose Your Plan</h3>
                 <p style={{ color: 'var(--muted)', fontSize: '0.85rem', marginBottom: 16 }}>
-                  Paid directly to the SessionManager contract. 80% goes to the node operator, 20% to treasury.
+                  Paid directly to the smart contract. 80% goes to the node operator, 20% to treasury.
                 </p>
-                <button className="btn-primary" onClick={handlePayAndConnect}>
-                  Pay & Connect
+
+                <div className="tier-picker">
+                  {allTierOptions.map(opt => (
+                    <button
+                      key={opt.key}
+                      className={`tier-option${selectedTier === opt.key ? ' selected' : ''}`}
+                      onClick={() => setSelectedTier(opt.key)}
+                    >
+                      <span className="tier-option-label">{opt.label}</span>
+                      <span className="tier-option-price">{opt.price} ETH</span>
+                      {opt.key !== '24h' && (
+                        <span className="tier-savings">Save vs daily</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  className="btn-primary"
+                  onClick={handlePayAndConnect}
+                  disabled={!selectedTier}
+                  style={{ marginTop: 16, width: '100%' }}
+                >
+                  {selectedTier ? `Pay & Connect` : 'Select a plan'}
                 </button>
               </div>
             )}

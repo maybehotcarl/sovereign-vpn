@@ -21,6 +21,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/revocation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/subscriptionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
@@ -76,6 +77,9 @@ func main() {
 	// SessionManager flags
 	sessionManagerContract := flag.String("session-manager", "", "SessionManager contract address (enables on-chain session tracking)")
 	sessionKey := flag.String("session-key", "", "Private key hex for SessionManager txs (contract owner)")
+
+	// SubscriptionManager flags
+	subManagerContract := flag.String("subscription-manager", "", "SubscriptionManager contract address (enables subscription-based access)")
 
 	// ZK verification flags
 	zkAPIURL := flag.String("zk-api-url", "", "ZK service API URL (enables ZK proof verification)")
@@ -284,6 +288,17 @@ func main() {
 		}
 	}
 
+	// Configure SubscriptionManager if contract address is provided (read-only, no key needed)
+	if *subManagerContract != "" {
+		sm, err := subscriptionmgr.New(cfg.EthereumRPC, *subManagerContract, int64(*chainID))
+		if err != nil {
+			log.Fatalf("Failed to create subscription manager: %v", err)
+		}
+		defer sm.Close()
+		srv.SetSubscriptionManager(sm)
+		log.Printf("SubscriptionManager enabled: %s", *subManagerContract)
+	}
+
 	// Configure ZK verification if API URL is provided
 	if *zkAPIURL != "" {
 		zkClient := zkverify.New(*zkAPIURL, *zkAPIKey)
@@ -321,6 +336,9 @@ func main() {
 	}
 	if *sessionManagerContract != "" {
 		log.Printf("  SessionMgr:    %s", *sessionManagerContract)
+	}
+	if *subManagerContract != "" {
+		log.Printf("  SubMgr:        %s", *subManagerContract)
 	}
 	if *zkAPIURL != "" {
 		log.Printf("  ZK API:        %s", *zkAPIURL)
