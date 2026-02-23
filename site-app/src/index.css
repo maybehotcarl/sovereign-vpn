@@ -333,6 +333,15 @@ footer a:hover { color: var(--accent); }
   letter-spacing: 0.03em;
 }
 
+/* Renew panel */
+.renew-panel {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
 @media (max-width: 600px) {
   .dashboard-stats {
     grid-template-columns: 1fr;

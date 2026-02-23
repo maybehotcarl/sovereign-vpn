@@ -9,6 +9,10 @@ export default function App() {
   const [gatewayUrl, setGatewayUrl] = useState('');
   const { session, saveSession, clearSession } = useSession();
 
+  const handleRenew = (newExpiresAt) => {
+    saveSession({ ...session, expiresAt: new Date(newExpiresAt * 1000).toISOString() });
+  };
+
   // Active or expired session — show dashboard
   if (session) {
     return (
@@ -26,6 +30,7 @@ export default function App() {
           session={session}
           onDisconnect={clearSession}
           onReconnect={clearSession}
+          onRenew={handleRenew}
         />
 
         <footer>

@@ -23,6 +23,7 @@ services:
       - "--wg-pubkey=${WG_SERVER_PUBKEY}"
       - "--eth-ws=${ETH_WS_URL:-}"
       - "--delegation"
+      - "--subscription-manager=${SUBSCRIPTION_MANAGER:-}"
     restart: unless-stopped
     networks:
       - vpn

@@ -1,4 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { formatEther } from 'viem';
+import { SUBSCRIPTION_MANAGER_ADDRESS, SUBSCRIPTION_MANAGER_ABI } from './contracts';
+
+const TIER_LABELS = {
+  '24h': '24 Hours',
+  '7d': '7 Days',
+  '30d': '30 Days',
+  '90d': '90 Days',
+  '365d': '365 Days',
+};
+
+function formatDuration(seconds) {
+  const days = Math.floor(seconds / 86400);
+  if (days >= 365) return '365d';
+  if (days >= 90) return '90d';
+  if (days >= 30) return '30d';
+  if (days >= 7) return '7d';
+  return '24h';
+}
 
 function formatTimeLeft(expiresAt) {
   const diff = new Date(expiresAt) - Date.now();
@@ -18,11 +38,23 @@ function daysRemaining(expiresAt) {
   return diff / 86400000;
 }
 
-export default function SessionDashboard({ session, onDisconnect, onReconnect }) {
+export default function SessionDashboard({ session, onDisconnect, onReconnect, onRenew }) {
   const [timeLeft, setTimeLeft] = useState(() => formatTimeLeft(session.expiresAt));
   const [disconnecting, setDisconnecting] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy');
+
+  // Renewal state
+  const [renewPhase, setRenewPhase] = useState('idle'); // idle|picking|sending|confirming|done|error
+  const [renewTiers, setRenewTiers] = useState([]);
+  const [renewSelected, setRenewSelected] = useState(null);
+  const [renewTxHash, setRenewTxHash] = useState(null);
+  const [renewError, setRenewError] = useState('');
+
+  const { writeContractAsync } = useWriteContract();
+  const { isSuccess: renewTxConfirmed, isError: renewTxFailed } = useWaitForTransactionReceipt({
+    hash: renewTxHash,
+  });
 
   const expired = !timeLeft;
   const isSubscription = session.tier === 'subscription';
@@ -36,6 +68,22 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
     }, 1000);
     return () => clearInterval(id);
   }, [session.expiresAt, expired]);
+
+  // Watch renewal TX
+  useEffect(() => {
+    if (renewTxConfirmed && renewPhase === 'confirming' && renewSelected) {
+      const currentExpiry = Math.floor(new Date(session.expiresAt).getTime() / 1000);
+      const now = Math.floor(Date.now() / 1000);
+      const newExpiresAt = Math.max(now, currentExpiry) + renewSelected.duration;
+      if (onRenew) onRenew(newExpiresAt);
+      setRenewPhase('done');
+      setTimeout(() => setRenewPhase('idle'), 3000);
+    }
+    if (renewTxFailed && renewPhase === 'confirming') {
+      setRenewError('Transaction failed on-chain');
+      setRenewPhase('error');
+    }
+  }, [renewTxConfirmed, renewTxFailed]);
 
   const handleDisconnect = useCallback(async () => {
     setDisconnecting(true);
@@ -53,6 +101,48 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
     }
     onDisconnect();
   }, [session, onDisconnect]);
+
+  const handleRenewClick = useCallback(async () => {
+    setRenewPhase('picking');
+    setRenewError('');
+    setRenewSelected(null);
+    setRenewTxHash(null);
+    try {
+      const resp = await fetch(`${session.gatewayUrl}/subscription/tiers`);
+      if (!resp.ok) throw new Error('Failed to fetch tiers');
+      const data = await resp.json();
+      setRenewTiers(data.tiers.map(t => ({
+        id: t.id,
+        durationKey: formatDuration(t.duration_seconds),
+        duration: t.duration_seconds,
+        costWei: t.price_wei,
+        costEth: formatEther(BigInt(t.price_wei)),
+        contract: data.contract,
+      })));
+    } catch (err) {
+      setRenewError(err.message);
+      setRenewPhase('error');
+    }
+  }, [session.gatewayUrl]);
+
+  const handleConfirmRenew = useCallback(async () => {
+    if (!renewSelected) return;
+    setRenewPhase('sending');
+    try {
+      const hash = await writeContractAsync({
+        address: renewSelected.contract,
+        abi: SUBSCRIPTION_MANAGER_ABI,
+        functionName: 'renewSubscription',
+        args: [renewSelected.id, '0x0000000000000000000000000000000000000000'],
+        value: BigInt(renewSelected.costWei),
+      });
+      setRenewTxHash(hash);
+      setRenewPhase('confirming');
+    } catch (err) {
+      setRenewError(err.message || 'Renewal failed');
+      setRenewPhase('error');
+    }
+  }, [renewSelected, writeContractAsync]);
 
   const downloadConfig = () => {
     const blob = new Blob([session.vpnConfig], { type: 'text/plain' });
@@ -124,7 +214,8 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
           {showRenew && (
             <button
               className="btn-primary"
-              onClick={onReconnect}
+              onClick={handleRenewClick}
+              disabled={renewPhase !== 'idle' && renewPhase !== 'error' && renewPhase !== 'done'}
               style={{ padding: '10px 20px', fontSize: '0.85rem' }}
             >
               Renew
@@ -145,6 +236,73 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect })
             {disconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
         </div>
+
+        {/* Renewal panel */}
+        {renewPhase === 'picking' && (
+          <div className="renew-panel">
+            <h3 style={{ marginBottom: 12 }}>Renew Subscription</h3>
+            <p style={{ color: 'var(--muted)', fontSize: '0.85rem', marginBottom: 16 }}>
+              Extend your subscription. Your VPN stays connected.
+            </p>
+            <div className="tier-picker">
+              {renewTiers.map(t => (
+                <button
+                  key={t.id}
+                  className={`tier-option${renewSelected === t ? ' selected' : ''}`}
+                  onClick={() => setRenewSelected(t)}
+                >
+                  <span className="tier-option-label">{TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)}d`}</span>
+                  <span className="tier-option-price">{t.costEth} ETH</span>
+                </button>
+              ))}
+            </div>
+            <div className="btn-row" style={{ marginTop: 16 }}>
+              <button
+                className="btn-primary"
+                onClick={handleConfirmRenew}
+                disabled={!renewSelected}
+                style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+              >
+                {renewSelected ? 'Confirm Renewal' : 'Select a plan'}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => setRenewPhase('idle')}
+                style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {(renewPhase === 'sending' || renewPhase === 'confirming') && (
+          <div className="renew-panel" style={{ textAlign: 'center' }}>
+            <div className="spinner" style={{ margin: '0 auto 12px' }} />
+            <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
+              {renewPhase === 'sending' ? 'Confirm transaction in your wallet...' : 'Waiting for confirmation...'}
+            </p>
+          </div>
+        )}
+
+        {renewPhase === 'done' && (
+          <div className="renew-panel" style={{ textAlign: 'center' }}>
+            <p style={{ color: 'var(--success)', fontWeight: 600 }}>Subscription renewed!</p>
+          </div>
+        )}
+
+        {renewPhase === 'error' && (
+          <div className="renew-panel" style={{ textAlign: 'center' }}>
+            <p style={{ color: 'var(--error)', marginBottom: 12 }}>{renewError}</p>
+            <button
+              className="btn-secondary"
+              onClick={() => setRenewPhase('idle')}
+              style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {showConfig && (
           <div style={{ marginTop: 16 }}>
