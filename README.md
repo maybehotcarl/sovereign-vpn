@@ -22,8 +22,11 @@ Sovereign VPN is a decentralized VPN where:
 | Component | Status | Tests |
 |-----------|--------|-------|
 | Smart Contracts (AccessPolicy, TestMemes) | Deployed (Sepolia) | 38 passing |
-| NodeRegistry (staking, heartbeat, slashing) | Deployed (Sepolia) | 35 passing |
-| SessionManager (payments, revenue split) | Deployed (Sepolia) | 28 passing |
+| NodeRegistry (staking, heartbeat, slashing, RAILGUN addr) | Deployed (Sepolia) | 42 passing |
+| SessionManager (payments, revenue split, vault routing) | Deployed (Sepolia) | 32 passing |
+| SubscriptionManager (7/30/90/365-day plans, vault routing) | Built | 48 passing |
+| PayoutVault (operator earnings aggregation) | Built | 26 passing |
+| RAILGUN Private Payout Service | Built | 17 passing |
 | SIWE Authentication Gateway | Built | 9 passing |
 | NFT Gate Middleware + Sessions | Built | 11 passing |
 | WireGuard Peer Manager | Built | 11 passing |
@@ -33,10 +36,10 @@ Sovereign VPN is a decentralized VPN where:
 | Node Registry Go Client + Discovery API | Built | - |
 | CLI Client (`svpn`) | Built | 19 passing |
 | End-to-End Integration Tests (mock + Sepolia) | Built | 9 passing |
-| GitHub Actions CI | Configured | - |
+| GitHub Actions CI (5 jobs) | Configured | - |
 | Docker Support | Configured | - |
 
-**Total: 180 tests across Solidity + Go**
+**Total: 177 Solidity + Go tests, 17 payout-service tests**
 
 ### Sepolia Testnet Contracts
 
@@ -84,11 +87,21 @@ Sovereign VPN is a decentralized VPN where:
                        │
 ┌──────────────────────▼──────────────────────────┐
 │            Ethereum Smart Contracts              │
-│  AccessPolicy.sol    - NFT ownership → tier      │
-│  NodeRegistry.sol    - node staking + heartbeat  │
-│  SessionManager.sol  - payments + revenue split  │
-│  TestMemes.sol       - Sepolia test ERC-1155     │
-└─────────────────────────────────────────────────┘
+│  AccessPolicy.sol           - NFT ownership → tier      │
+│  NodeRegistry.sol           - node staking + heartbeat  │
+│  SessionManager.sol         - payments + revenue split  │
+│  SubscriptionManager.sol    - subscription plans        │
+│  PayoutVault.sol            - operator earnings vault   │
+│  TestMemes.sol              - Sepolia test ERC-1155     │
+└──────────────────────────────────────────────────────────┘
+                       │
+              ┌────────▼────────┐
+              │  Payout Service  │
+              │  (TypeScript)    │
+              │  PayoutVault →   │
+              │  RAILGUN shield  │
+              │  → 0zk transfer  │
+              └─────────────────┘
 ```
 
 ## Quick Start
@@ -145,11 +158,14 @@ See [deploy/setup-node.sh](deploy/setup-node.sh) for full VPS setup.
 sovereign-vpn/
 ├── contracts/          # Solidity (Foundry)
 │   ├── src/
-│   │   ├── AccessPolicy.sol    # NFT ownership → VPN access tiers
-│   │   ├── NodeRegistry.sol    # Node staking, reputation, slashing
-│   │   ├── SessionManager.sol  # Payment routing + revenue split
-│   │   └── TestMemes.sol       # Test ERC-1155 for Sepolia
-│   └── test/                   # 104 Foundry tests
+│   │   ├── AccessPolicy.sol         # NFT ownership → VPN access tiers
+│   │   ├── NodeRegistry.sol         # Node staking, reputation, RAILGUN address
+│   │   ├── SessionManager.sol       # Payment routing + revenue split
+│   │   ├── SubscriptionManager.sol  # Subscription plans (7/30/90/365-day)
+│   │   ├── PayoutVault.sol          # Operator earnings aggregation vault
+│   │   └── TestMemes.sol            # Test ERC-1155 for Sepolia
+│   ├── test/                        # 160 Foundry tests
+│   └── script/                      # Deploy scripts
 ├── gateway/            # Go gateway server
 │   ├── cmd/gateway/            # Entry point with graceful shutdown
 │   ├── pkg/
@@ -160,9 +176,10 @@ sovereign-vpn/
 │   │   ├── wireguard/          # Peer lifecycle + IP pool
 │   │   ├── delegation/         # delegate.xyz v2 + 6529 registry
 │   │   ├── revocation/         # ERC-1155 transfer event watcher
-│   │   ├── noderegistry/       # On-chain node registry client + heartbeat
+│   │   ├── noderegistry/       # On-chain node registry + RAILGUN address
+│   │   ├── payoutvault/        # PayoutVault read-only client
 │   │   ├── rep6529/            # 6529 community rep checker (api.6529.io)
-│   │   └── server/             # HTTP handlers + node discovery API
+│   │   └── server/             # HTTP handlers + node discovery + payout API
 │   └── Dockerfile
 ├── client/             # Go CLI client
 │   ├── cmd/svpn/               # CLI: connect, nodes, status, keygen, health
@@ -171,11 +188,41 @@ sovereign-vpn/
 │   │   ├── wallet/             # Ethereum key management + ERC-191 signing
 │   │   └── wgconf/             # WireGuard config generation
 │   └── Dockerfile
+├── payout-service/     # TypeScript RAILGUN payout processor
+│   ├── src/
+│   │   ├── vault.ts            # PayoutVault contract bindings
+│   │   ├── registry.ts         # NodeRegistry 0zk address reader
+│   │   ├── railgun/            # RAILGUN SDK: shield + private transfer
+│   │   ├── payout/             # Batch processor + retry logic
+│   │   ├── receipts/           # SQLite payout receipt storage
+│   │   └── monitoring/         # Health check endpoint
+│   ├── test/                   # 17 vitest tests
+│   └── Dockerfile
+├── site-app/           # React frontend (wagmi + viem)
+│   └── src/
+│       ├── RailgunAddress.jsx  # Operator 0zk address registration
+│       ├── SessionDashboard.jsx # VPN dashboard + payout status
+│       └── contracts.js        # Contract ABIs + addresses
 ├── integration/        # End-to-end tests (mock + Sepolia live)
 ├── deploy/             # VPS setup scripts
 ├── research/           # Sentinel handshake analysis
-└── .github/workflows/  # CI pipeline
+└── .github/workflows/  # CI pipeline (5 jobs)
 ```
+
+## RAILGUN Private Payouts
+
+Operator earnings are private by default. Instead of withdrawing ETH to a public wallet (exposing payment amounts and operator identities on-chain), earnings route through RAILGUN's shielded transfer system.
+
+**How it works:**
+
+1. Users pay for VPN via SessionManager or SubscriptionManager contracts
+2. The operator's 80% share gets forwarded to the **PayoutVault** contract
+3. A **payout service** (weekly cron) pulls funds from the vault, shields them into RAILGUN, and sends private 0zk-to-0zk transfers to each operator's registered address
+4. Operators register their RAILGUN `0zk` address on-chain via NodeRegistry (or through the frontend UI)
+
+**Privacy trade-off:** Operators receive ~99.25–99.5% of earnings (RAILGUN shielding fee ~0.25%, relayer ~0.25%) in exchange for complete payment privacy.
+
+The system is backward-compatible — if no vault is configured, operator earnings accumulate as withdrawable balances (legacy behavior). The payout service defaults to `DRY_RUN=true` for safe initial deployment.
 
 ## How to Contribute
 
