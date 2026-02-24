@@ -27,6 +27,32 @@ export const SESSION_MANAGER_ABI = [
   },
 ];
 
+export const NODE_REGISTRY_ADDRESS = import.meta.env.VITE_NODE_REGISTRY || '';
+
+export const NODE_REGISTRY_ABI = [
+  {
+    inputs: [{ name: '_railgunAddress', type: 'string' }],
+    name: 'setRailgunAddress',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+  {
+    inputs: [{ name: 'operator', type: 'address' }],
+    name: 'getRailgunAddress',
+    outputs: [{ name: '', type: 'string' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [{ name: '', type: 'address' }],
+    name: 'isRegistered',
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+];
+
 export const SUBSCRIPTION_MANAGER_ADDRESS = import.meta.env.VITE_SUBSCRIPTION_MANAGER || '';
 
 export const SUBSCRIPTION_MANAGER_ABI = [

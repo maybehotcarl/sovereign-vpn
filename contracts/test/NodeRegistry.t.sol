@@ -542,4 +542,72 @@ contract NodeRegistryTest is Test {
         assertEq(registry.memesContract(), address(memes));
         assertEq(registry.operatorCardId(), OPERATOR_CARD_ID);
     }
+
+    // =========================================================================
+    //                          RAILGUN ADDRESS
+    // =========================================================================
+
+    function test_SetRailgunAddress() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        registry.setRailgunAddress("0zkTestAddress123");
+
+        string memory addr = registry.getRailgunAddress(operator1);
+        assertEq(keccak256(bytes(addr)), keccak256(bytes("0zkTestAddress123")));
+    }
+
+    function test_UpdateRailgunAddress() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        registry.setRailgunAddress("0zkFirst");
+
+        vm.prank(operator1);
+        registry.setRailgunAddress("0zkSecond");
+
+        string memory addr = registry.getRailgunAddress(operator1);
+        assertEq(keccak256(bytes(addr)), keccak256(bytes("0zkSecond")));
+    }
+
+    function test_SetRailgunAddressRevertsNotRegistered() public {
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.NotRegistered.selector);
+        registry.setRailgunAddress("0zkTestAddress");
+    }
+
+    function test_SetRailgunAddressRevertsInvalidPrefix() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
+        registry.setRailgunAddress("0xNotRailgun");
+    }
+
+    function test_SetRailgunAddressRevertsEmpty() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
+        registry.setRailgunAddress("");
+    }
+
+    function test_GetRailgunAddressUnregistered() public view {
+        string memory addr = registry.getRailgunAddress(randomUser);
+        assertEq(bytes(addr).length, 0);
+    }
+
+    function test_EmitsRailgunAddressSet() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        vm.expectEmit(true, false, false, true);
+        emit NodeRegistry.RailgunAddressSet(operator1, "0zkTestAddr");
+        registry.setRailgunAddress("0zkTestAddr");
+    }
 }

@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/SessionManager.sol";
+import "../src/PayoutVault.sol";
 
 contract SessionManagerTest is Test {
     SessionManager public sm;
@@ -425,5 +426,53 @@ contract SessionManagerTest is Test {
         // 100% should go to treasury, 0% to operator
         assertEq(sm0.operatorBalance(nodeOp), 0);
         assertEq(sm0.treasuryBalance(), 0.001 ether);
+    }
+
+    // =========================================================================
+    //                          PAYOUT VAULT ROUTING
+    // =========================================================================
+
+    function test_CloseSessionRoutesToVault() public {
+        // Deploy PayoutVault and wire it up
+        address executor = address(0xE0E0);
+        PayoutVault vault = new PayoutVault(executor);
+        vault.authorizeSource(address(sm));
+        sm.setPayoutVault(address(vault));
+
+        // Open and close a paid session
+        vm.prank(user1);
+        uint256 sessionId = sm.openSession{value: 0.001 ether}(nodeOp, 3600);
+
+        vm.prank(user1);
+        sm.closeSession(sessionId);
+
+        // Operator share should be in vault, not in SM's operatorBalance
+        assertEq(sm.operatorBalance(nodeOp), 0);
+        assertEq(vault.pendingPayouts(nodeOp), 0.0008 ether);
+        assertEq(sm.treasuryBalance(), 0.0002 ether);
+    }
+
+    function test_CloseSessionFallsBackWithoutVault() public {
+        // No vault set — should behave as before
+        vm.prank(user1);
+        uint256 sessionId = sm.openSession{value: 0.001 ether}(nodeOp, 3600);
+
+        vm.prank(user1);
+        sm.closeSession(sessionId);
+
+        assertEq(sm.operatorBalance(nodeOp), 0.0008 ether);
+        assertEq(sm.treasuryBalance(), 0.0002 ether);
+    }
+
+    function test_SetPayoutVault() public {
+        address vault = address(0xBEEF);
+        sm.setPayoutVault(vault);
+        assertEq(sm.payoutVault(), vault);
+    }
+
+    function test_SetPayoutVaultRevertsNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        sm.setPayoutVault(address(0xBEEF));
     }
 }

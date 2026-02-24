@@ -102,6 +102,13 @@ const nodeRegistryABIJSON = `[
 		"type": "function"
 	},
 	{
+		"inputs": [{"name": "operator", "type": "address"}],
+		"name": "getRailgunAddress",
+		"outputs": [{"name": "", "type": "string"}],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
 		"inputs": [{"name": "region", "type": "string"}],
 		"name": "getActiveNodesByRegion",
 		"outputs": [{
@@ -298,6 +305,38 @@ func (r *Registry) IsEligibleOperator(ctx context.Context, operator common.Addre
 		return false, fmt.Errorf("unexpected type: %T", results[0])
 	}
 	return eligible, nil
+}
+
+// GetRailgunAddress returns the RAILGUN 0zk address registered by an operator.
+// Returns empty string if no address is set.
+func (r *Registry) GetRailgunAddress(ctx context.Context, operator common.Address) (string, error) {
+	callData, err := r.abi.Pack("getRailgunAddress", operator)
+	if err != nil {
+		return "", fmt.Errorf("packing call data: %w", err)
+	}
+
+	output, err := r.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &r.contractAddr,
+		Data: callData,
+	}, nil)
+	if err != nil {
+		return "", fmt.Errorf("calling getRailgunAddress: %w", err)
+	}
+
+	results, err := r.abi.Unpack("getRailgunAddress", output)
+	if err != nil {
+		return "", fmt.Errorf("unpacking getRailgunAddress: %w", err)
+	}
+
+	if len(results) != 1 {
+		return "", fmt.Errorf("expected 1 result, got %d", len(results))
+	}
+
+	addr, ok := results[0].(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected type for railgunAddress: %T", results[0])
+	}
+	return addr, nil
 }
 
 // InvalidateCache forces the next GetActiveNodes call to re-fetch from chain.

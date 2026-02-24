@@ -17,6 +17,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/delegation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/payoutvault"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/revocation"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/server"
@@ -80,6 +81,9 @@ func main() {
 
 	// SubscriptionManager flags
 	subManagerContract := flag.String("subscription-manager", "", "SubscriptionManager contract address (enables subscription-based access)")
+
+	// PayoutVault flags
+	payoutVaultContract := flag.String("payout-vault", "", "PayoutVault contract address (enables payout status endpoint)")
 
 	// ZK verification flags
 	zkAPIURL := flag.String("zk-api-url", "", "ZK service API URL (enables ZK proof verification)")
@@ -289,6 +293,17 @@ func main() {
 		log.Printf("SubscriptionManager enabled: %s", *subManagerContract)
 	}
 
+	// Configure PayoutVault if contract address is provided (read-only)
+	if *payoutVaultContract != "" {
+		pvClient, err := payoutvault.NewClient(cfg.EthereumRPC, *payoutVaultContract)
+		if err != nil {
+			log.Fatalf("Failed to create payout vault client: %v", err)
+		}
+		defer pvClient.Close()
+		srv.SetPayoutVault(pvClient)
+		log.Printf("PayoutVault enabled: %s", *payoutVaultContract)
+	}
+
 	// Configure ZK verification if API URL is provided
 	if *zkAPIURL != "" {
 		zkClient := zkverify.New(*zkAPIURL, *zkAPIKey)
@@ -328,6 +343,9 @@ func main() {
 	}
 	if *subManagerContract != "" {
 		log.Printf("  SubMgr:        %s", *subManagerContract)
+	}
+	if *payoutVaultContract != "" {
+		log.Printf("  PayoutVault:   %s", *payoutVaultContract)
 	}
 	if *zkAPIURL != "" {
 		log.Printf("  ZK API:        %s", *zkAPIURL)

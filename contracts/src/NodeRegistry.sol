@@ -62,6 +62,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     /// @notice Accumulated slashed ETH (withdrawable by governance for the community treasury).
     uint256 public slashedFunds;
 
+    /// @notice Operator → RAILGUN 0zk address for private payouts.
+    mapping(address => string) public railgunAddresses;
+
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -77,6 +80,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     event SlashedFundsWithdrawn(address indexed to, uint256 amount);
     event MinStakeUpdated(uint256 oldMin, uint256 newMin);
     event HeartbeatIntervalUpdated(uint256 oldInterval, uint256 newInterval);
+    event RailgunAddressSet(address indexed operator, string railgunAddress);
 
     // =========================================================================
     //                          ERRORS
@@ -92,6 +96,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     error InvalidWgPubKey();
     error NoFundsToWithdraw();
     error NotEligibleOperator();
+    error InvalidRailgunAddress();
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -209,6 +214,24 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         if (bytes(newEndpoint).length == 0) revert InvalidEndpoint();
         nodes[msg.sender].endpoint = newEndpoint;
         emit EndpointUpdated(msg.sender, newEndpoint);
+    }
+
+    /// @notice Set or update the operator's RAILGUN 0zk address for private payouts.
+    /// @param _railgunAddress RAILGUN shielded address (must start with "0zk")
+    function setRailgunAddress(string calldata _railgunAddress) external {
+        if (!isRegistered[msg.sender]) revert NotRegistered();
+        // Validate 0zk prefix
+        bytes memory addrBytes = bytes(_railgunAddress);
+        if (addrBytes.length < 3 || addrBytes[0] != "0" || addrBytes[1] != "z" || addrBytes[2] != "k") {
+            revert InvalidRailgunAddress();
+        }
+        railgunAddresses[msg.sender] = _railgunAddress;
+        emit RailgunAddressSet(msg.sender, _railgunAddress);
+    }
+
+    /// @notice Get an operator's registered RAILGUN address.
+    function getRailgunAddress(address operator) external view returns (string memory) {
+        return railgunAddresses[operator];
     }
 
     // =========================================================================

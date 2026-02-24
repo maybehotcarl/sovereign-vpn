@@ -58,6 +58,28 @@ jobs:
         working-directory: client
         run: go test -race -count=1 ./...
 
+  payout-service:
+    name: Payout Service Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: payout-service
+        run: npm ci
+
+      - name: Lint
+        working-directory: payout-service
+        run: npm run lint || true
+
+      - name: Test
+        working-directory: payout-service
+        run: npm test
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest

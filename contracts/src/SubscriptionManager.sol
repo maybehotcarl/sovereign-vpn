@@ -4,6 +4,10 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+interface IPayoutVault {
+    function creditOperator(address operator) external payable;
+}
+
 /// @title SubscriptionManager
 /// @notice Time-based VPN subscription management with tiered pricing.
 ///         Users buy 7/30/90/365-day access in a single transaction.
@@ -53,6 +57,10 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
 
     /// @notice Accumulated treasury balance (withdrawable).
     uint256 public treasuryBalance;
+
+    /// @notice PayoutVault address for RAILGUN private payouts. When set, operator
+    ///         earnings route to the vault instead of accumulating here.
+    address public payoutVault;
 
     /// @notice Total subscriptions created.
     uint256 public totalSubscriptions;
@@ -303,16 +311,27 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
         treasury = newTreasury;
     }
 
+    /// @notice Set the PayoutVault address for RAILGUN private payouts.
+    ///         Set to address(0) to disable and revert to legacy balance accumulation.
+    function setPayoutVault(address _payoutVault) external onlyOwner {
+        payoutVault = _payoutVault;
+    }
+
     // =========================================================================
     //                          INTERNAL
     // =========================================================================
 
     /// @dev Split payment between operator and treasury.
+    ///      Routes operator share to PayoutVault (RAILGUN) when configured.
     function _distributePayment(address node, uint256 amount) internal {
         uint256 operatorPayout = (amount * operatorShareBps) / 10000;
         uint256 treasuryPayout = amount - operatorPayout;
 
-        operatorBalance[node] += operatorPayout;
+        if (payoutVault != address(0)) {
+            IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(node);
+        } else {
+            operatorBalance[node] += operatorPayout;
+        }
         treasuryBalance += treasuryPayout;
     }
 }

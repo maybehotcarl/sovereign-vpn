@@ -14,6 +14,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/payoutvault"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
@@ -33,10 +34,11 @@ type Server struct {
 	userRep    *rep6529.Checker
 	sessionMgr *sessionmgr.Manager
 	subMgr     *subscriptionmgr.Manager
-	zkClient   *zkverify.Client
-	thisCardID int64
-	mux        *http.ServeMux
-	corsOrigin string
+	zkClient    *zkverify.Client
+	payoutVault *payoutvault.Client
+	thisCardID  int64
+	mux         *http.ServeMux
+	corsOrigin  string
 }
 
 // New creates a new gateway server.
@@ -71,6 +73,9 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	// Node discovery endpoint (public)
 	s.mux.HandleFunc("GET /nodes", s.handleListNodes)
 	s.mux.HandleFunc("GET /nodes/region", s.handleListNodesByRegion)
+
+	// Payout status (public — returns pending payout + 0zk address for an operator)
+	s.mux.HandleFunc("GET /payout/status", s.handlePayoutStatus)
 
 	return s
 }
@@ -108,6 +113,11 @@ func (s *Server) SetCORSOrigin(origin string) {
 // SetZKClient configures the ZK API client for proof verification.
 func (s *Server) SetZKClient(c *zkverify.Client) {
 	s.zkClient = c
+}
+
+// SetPayoutVault configures the PayoutVault client for payout status queries.
+func (s *Server) SetPayoutVault(c *payoutvault.Client) {
+	s.payoutVault = c
 }
 
 // SetThisCardID configures the token ID that grants free tier via ZK proof.
@@ -578,12 +588,13 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 
 // NodeResponse is a public-facing node representation.
 type NodeResponse struct {
-	Operator     string `json:"operator"`
-	Endpoint     string `json:"endpoint"`
-	WgPubKey     string `json:"wg_pub_key"`
-	Region       string `json:"region"`
-	CardEligible bool   `json:"card_eligible"` // whether operator holds the required card
-	Active       bool   `json:"active"`
+	Operator       string `json:"operator"`
+	Endpoint       string `json:"endpoint"`
+	WgPubKey       string `json:"wg_pub_key"`
+	Region         string `json:"region"`
+	CardEligible   bool   `json:"card_eligible"`              // whether operator holds the required card
+	Active         bool   `json:"active"`
+	RailgunAddress string `json:"railgun_address,omitempty"`  // RAILGUN 0zk address
 }
 
 // GET /nodes — list all active VPN nodes from the on-chain registry.
@@ -661,12 +672,70 @@ func (s *Server) enrichNodesWithCardCheck(ctx context.Context, nodes []noderegis
 			nr.CardEligible = cardOk
 		}
 
+		// Fetch RAILGUN 0zk address if registry is available
+		if s.registry != nil {
+			railgunAddr, err := s.registry.GetRailgunAddress(ctx, n.Operator)
+			if err == nil && railgunAddr != "" {
+				nr.RailgunAddress = railgunAddr
+			}
+		}
+
 		// Only include card-eligible nodes in the response
 		if nr.CardEligible {
 			eligible = append(eligible, nr)
 		}
 	}
 	return eligible
+}
+
+// =========================================================================
+//                          PAYOUT HANDLERS
+// =========================================================================
+
+// GET /payout/status?operator=0x... — returns pending payout + 0zk address for an operator.
+func (s *Server) handlePayoutStatus(w http.ResponseWriter, r *http.Request) {
+	operatorHex := r.URL.Query().Get("operator")
+	if operatorHex == "" {
+		writeError(w, http.StatusBadRequest, "operator query param required")
+		return
+	}
+
+	operator := common.HexToAddress(operatorHex)
+	resp := map[string]any{
+		"operator": operator.Hex(),
+	}
+
+	// Fetch pending payout from vault
+	if s.payoutVault != nil {
+		pending, err := s.payoutVault.GetPendingPayout(r.Context(), operator)
+		if err != nil {
+			log.Printf("Error fetching pending payout for %s: %v", operatorHex, err)
+		} else {
+			resp["pending_payout_wei"] = pending.String()
+		}
+
+		processed, err := s.payoutVault.GetProcessedPayout(r.Context(), operator)
+		if err != nil {
+			log.Printf("Error fetching processed payout for %s: %v", operatorHex, err)
+		} else {
+			resp["processed_payout_wei"] = processed.String()
+		}
+	} else {
+		resp["pending_payout_wei"] = "0"
+		resp["processed_payout_wei"] = "0"
+	}
+
+	// Fetch RAILGUN address from registry
+	if s.registry != nil {
+		railgunAddr, err := s.registry.GetRailgunAddress(r.Context(), operator)
+		if err != nil {
+			log.Printf("Error fetching railgun address for %s: %v", operatorHex, err)
+		} else {
+			resp["railgun_address"] = railgunAddr
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // =========================================================================

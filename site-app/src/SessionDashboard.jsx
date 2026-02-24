@@ -43,6 +43,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const [disconnecting, setDisconnecting] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [copyLabel, setCopyLabel] = useState('Copy');
+  const [payoutInfo, setPayoutInfo] = useState(null);
 
   // Renewal state
   const [renewPhase, setRenewPhase] = useState('idle'); // idle|picking|sending|confirming|done|error
@@ -59,6 +60,15 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const expired = !timeLeft;
   const isSubscription = session.tier === 'subscription';
   const showRenew = isSubscription && !expired && daysRemaining(session.expiresAt) < 7;
+
+  // Fetch payout info for the connected node operator
+  useEffect(() => {
+    if (!session.gatewayUrl || !session.nodeOperator) return;
+    fetch(`${session.gatewayUrl}/payout/status?operator=${session.nodeOperator}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setPayoutInfo(data); })
+      .catch(() => {});
+  }, [session.gatewayUrl, session.nodeOperator]);
 
   // Live countdown
   useEffect(() => {
@@ -208,6 +218,22 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
             <div className="stat-label">Server</div>
             <div className="stat-value mono">{session.serverEndpoint}</div>
           </div>
+          {payoutInfo && payoutInfo.pending_payout_wei && payoutInfo.pending_payout_wei !== '0' && (
+            <div className="stat">
+              <div className="stat-label">Pending Payout</div>
+              <div className="stat-value mono">
+                {(Number(payoutInfo.pending_payout_wei) / 1e18).toFixed(6)} ETH
+              </div>
+            </div>
+          )}
+          {payoutInfo && (
+            <div className="stat">
+              <div className="stat-label">RAILGUN Address</div>
+              <div className="stat-value mono" style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>
+                {payoutInfo.railgun_address || 'Not set'}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="dashboard-actions">
