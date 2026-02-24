@@ -48,7 +48,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     address public immutable memesContract;
 
     /// @notice Token ID of the operator card required to run a node.
-    uint256 public immutable operatorCardId;
+    uint256 public operatorCardId;
 
     /// @notice All registered node IDs (operator addresses).
     address[] public nodeList;
@@ -81,6 +81,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     event MinStakeUpdated(uint256 oldMin, uint256 newMin);
     event HeartbeatIntervalUpdated(uint256 oldInterval, uint256 newInterval);
     event RailgunAddressSet(address indexed operator, string railgunAddress);
+    event OperatorCardIdUpdated(uint256 oldCardId, uint256 newCardId);
 
     // =========================================================================
     //                          ERRORS
@@ -289,6 +290,12 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     function setHeartbeatInterval(uint256 newInterval) external onlyOwner {
         emit HeartbeatIntervalUpdated(heartbeatInterval, newInterval);
         heartbeatInterval = newInterval;
+    }
+
+    /// @notice Update the operator card token ID (e.g., after governance vote).
+    function setOperatorCardId(uint256 newCardId) external onlyOwner {
+        emit OperatorCardIdUpdated(operatorCardId, newCardId);
+        operatorCardId = newCardId;
     }
 
     // =========================================================================

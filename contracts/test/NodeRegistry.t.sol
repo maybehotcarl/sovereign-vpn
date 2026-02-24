@@ -543,6 +543,41 @@ contract NodeRegistryTest is Test {
         assertEq(registry.operatorCardId(), OPERATOR_CARD_ID);
     }
 
+    function test_SetOperatorCardId() public {
+        uint256 newCardId = 42;
+
+        // randomUser has no card 1, can't register
+        vm.deal(randomUser, 10 ether);
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.NotEligibleOperator.selector);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        // Mint new card to randomUser, change required card ID
+        memes.mint(randomUser, newCardId, 1);
+        registry.setOperatorCardId(newCardId);
+        assertEq(registry.operatorCardId(), newCardId);
+
+        // randomUser can now register with new card
+        vm.prank(randomUser);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+        assertTrue(registry.isRegistered(randomUser));
+
+        // operator1 still has old card (ID 1) but NOT new card — isEligibleOperator returns false
+        assertFalse(registry.isEligibleOperator(operator1));
+    }
+
+    function test_SetOperatorCardIdRevertsNotOwner() public {
+        vm.prank(randomUser);
+        vm.expectRevert();
+        registry.setOperatorCardId(42);
+    }
+
+    function test_SetOperatorCardIdEmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit NodeRegistry.OperatorCardIdUpdated(OPERATOR_CARD_ID, 42);
+        registry.setOperatorCardId(42);
+    }
+
     // =========================================================================
     //                          RAILGUN ADDRESS
     // =========================================================================
