@@ -207,10 +207,12 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
 
             // Route operator share to PayoutVault (RAILGUN) if configured,
             // otherwise accumulate locally for legacy withdrawal.
-            if (payoutVault != address(0)) {
-                IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(s.node);
-            } else {
-                operatorBalance[s.node] += operatorPayout;
+            if (operatorPayout > 0) {
+                if (payoutVault != address(0)) {
+                    IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(s.node);
+                } else {
+                    operatorBalance[s.node] += operatorPayout;
+                }
             }
             treasuryBalance += treasuryPayout;
 

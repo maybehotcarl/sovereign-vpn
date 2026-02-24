@@ -327,10 +327,12 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
         uint256 operatorPayout = (amount * operatorShareBps) / 10000;
         uint256 treasuryPayout = amount - operatorPayout;
 
-        if (payoutVault != address(0)) {
-            IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(node);
-        } else {
-            operatorBalance[node] += operatorPayout;
+        if (operatorPayout > 0) {
+            if (payoutVault != address(0)) {
+                IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(node);
+            } else {
+                operatorBalance[node] += operatorPayout;
+            }
         }
         treasuryBalance += treasuryPayout;
     }
