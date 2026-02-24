@@ -75,6 +75,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event OperatorShareUpdated(uint256 oldShare, uint256 newShare);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event RewardsDistributed(address[] operators, uint256[] amounts, uint256 totalDistributed);
 
     // =========================================================================
     //                          ERRORS
@@ -89,6 +90,8 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     error NotSessionParticipant();
     error NothingToWithdraw();
     error ZeroAddress();
+    error ArrayLengthMismatch();
+    error InsufficientTreasuryBalance(uint256 requested, uint256 available);
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -232,6 +235,32 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
         require(sent, "ETH transfer failed");
 
         emit TreasuryWithdrawal(treasury, amount);
+    }
+
+    // =========================================================================
+    //                          REWARDS DISTRIBUTION
+    // =========================================================================
+
+    /// @notice Distribute treasury funds to operators as rewards.
+    ///         Governance decides amounts off-chain; this function executes the distribution.
+    ///         Operators claim via withdrawOperatorEarnings().
+    /// @param operators Array of operator addresses to reward
+    /// @param amounts Array of reward amounts (must match operators length)
+    function distributeRewards(address[] calldata operators, uint256[] calldata amounts) external onlyOwner nonReentrant {
+        if (operators.length != amounts.length) revert ArrayLengthMismatch();
+
+        uint256 total;
+        for (uint256 i = 0; i < amounts.length; i++) {
+            total += amounts[i];
+        }
+        if (total > treasuryBalance) revert InsufficientTreasuryBalance(total, treasuryBalance);
+
+        treasuryBalance -= total;
+        for (uint256 i = 0; i < operators.length; i++) {
+            operatorBalance[operators[i]] += amounts[i];
+        }
+
+        emit RewardsDistributed(operators, amounts, total);
     }
 
     // =========================================================================

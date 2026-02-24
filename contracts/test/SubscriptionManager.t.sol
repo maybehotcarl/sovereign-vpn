@@ -328,4 +328,111 @@ contract SubscriptionManagerTest is Test {
         emit SubscriptionManager.Renewed(user1, nodeOp, TIER_30D, PRICE_30D, expectedExpiry);
         sm.renewSubscription{value: PRICE_30D}(TIER_30D, address(0));
     }
+
+    // =========================================================================
+    //                          DISTRIBUTE REWARDS (Option C)
+    // =========================================================================
+
+    function test_DistributeRewards() public {
+        // Generate treasury balance via subscription
+        vm.prank(user1);
+        sm.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        uint256 treasuryBal = sm.treasuryBalance();
+        assertTrue(treasuryBal > 0);
+
+        // Distribute all treasury balance to one operator
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp2;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = treasuryBal;
+
+        sm.distributeRewards(ops, amts);
+
+        assertEq(sm.treasuryBalance(), 0);
+        assertEq(sm.operatorBalance(nodeOp2), treasuryBal);
+    }
+
+    function test_DistributeRewardsMultipleOperators() public {
+        vm.prank(user1);
+        sm.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        uint256 treasuryBal = sm.treasuryBalance();
+
+        address[] memory ops = new address[](2);
+        ops[0] = nodeOp;
+        ops[1] = nodeOp2;
+        uint256[] memory amts = new uint256[](2);
+        amts[0] = treasuryBal / 2;
+        amts[1] = treasuryBal / 2;
+
+        sm.distributeRewards(ops, amts);
+
+        assertEq(sm.operatorBalance(nodeOp), (PRICE_30D * 80 / 100) + treasuryBal / 2);
+        assertEq(sm.operatorBalance(nodeOp2), treasuryBal / 2);
+    }
+
+    function test_DistributeRewardsRevertsInsufficientBalance() public {
+        // Treasury has 0 balance
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 1 ether;
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SubscriptionManager.InsufficientTreasuryBalance.selector, 1 ether, 0
+        ));
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_DistributeRewardsRevertsArrayMismatch() public {
+        address[] memory ops = new address[](2);
+        ops[0] = nodeOp;
+        ops[1] = nodeOp2;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 0.001 ether;
+
+        vm.expectRevert(SubscriptionManager.ArrayLengthMismatch.selector);
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_DistributeRewardsRevertsNotOwner() public {
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 0.001 ether;
+
+        vm.prank(user1);
+        vm.expectRevert();
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_ZeroOperatorShare() public {
+        // Deploy with 0% operator share (100% to treasury)
+        SubscriptionManager sm0 = new SubscriptionManager(treasury, 0);
+        sm0.setTier(TIER_30D, PRICE_30D, 30 days, true);
+
+        vm.prank(user1);
+        sm0.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        // 100% should go to treasury, 0% to operator
+        assertEq(sm0.operatorBalance(nodeOp), 0);
+        assertEq(sm0.treasuryBalance(), PRICE_30D);
+    }
+
+    function test_DistributeRewardsEmitsEvent() public {
+        vm.prank(user1);
+        sm.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        uint256 treasuryBal = sm.treasuryBalance();
+
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp2;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = treasuryBal;
+
+        vm.expectEmit(false, false, false, true);
+        emit SubscriptionManager.RewardsDistributed(ops, amts, treasuryBal);
+        sm.distributeRewards(ops, amts);
+    }
 }

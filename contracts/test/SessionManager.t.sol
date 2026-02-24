@@ -353,4 +353,77 @@ contract SessionManagerTest is Test {
         emit SessionManager.SessionClosed(1, user1, 0.0008 ether, 0.0002 ether);
         sm.closeSession(1);
     }
+
+    // =========================================================================
+    //                          DISTRIBUTE REWARDS (Option C)
+    // =========================================================================
+
+    function test_DistributeRewards_Session() public {
+        // Generate treasury balance via paid session
+        vm.prank(user1);
+        uint256 sid = sm.openSession{value: 0.001 ether}(nodeOp, 3600);
+        vm.prank(user1);
+        sm.closeSession(sid);
+
+        uint256 treasuryBal = sm.treasuryBalance();
+        assertTrue(treasuryBal > 0);
+
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp2;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = treasuryBal;
+
+        sm.distributeRewards(ops, amts);
+
+        assertEq(sm.treasuryBalance(), 0);
+        assertEq(sm.operatorBalance(nodeOp2), treasuryBal);
+    }
+
+    function test_DistributeRewardsRevertsInsufficientBalance_Session() public {
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 1 ether;
+
+        vm.expectRevert(abi.encodeWithSelector(
+            SessionManager.InsufficientTreasuryBalance.selector, 1 ether, 0
+        ));
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_DistributeRewardsRevertsArrayMismatch_Session() public {
+        address[] memory ops = new address[](2);
+        ops[0] = nodeOp;
+        ops[1] = nodeOp2;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 0.001 ether;
+
+        vm.expectRevert(SessionManager.ArrayLengthMismatch.selector);
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_DistributeRewardsRevertsNotOwner_Session() public {
+        address[] memory ops = new address[](1);
+        ops[0] = nodeOp;
+        uint256[] memory amts = new uint256[](1);
+        amts[0] = 0.001 ether;
+
+        vm.prank(user1);
+        vm.expectRevert();
+        sm.distributeRewards(ops, amts);
+    }
+
+    function test_ZeroOperatorShare_SessionClose() public {
+        // Deploy with 0% operator share
+        SessionManager sm0 = new SessionManager(treasury, 0, PRICE_PER_HOUR, MAX_DURATION);
+
+        vm.prank(user1);
+        uint256 sid = sm0.openSession{value: 0.001 ether}(nodeOp, 3600);
+        vm.prank(user1);
+        sm0.closeSession(sid);
+
+        // 100% should go to treasury, 0% to operator
+        assertEq(sm0.operatorBalance(nodeOp), 0);
+        assertEq(sm0.treasuryBalance(), 0.001 ether);
+    }
 }

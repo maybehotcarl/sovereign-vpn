@@ -57,10 +57,10 @@ func main() {
 	nodeRegistryContract := flag.String("node-registry", "", "NodeRegistry contract address")
 	nodeRegistryCacheTTL := flag.Duration("node-cache-ttl", 2*time.Minute, "Node registry cache TTL")
 
-	// 6529 Rep flags
-	repMinimum := flag.Int64("rep-min", rep6529.DefaultMinRep, "Minimum 6529 rep to operate a node")
-	repCategory := flag.String("rep-category", rep6529.DefaultCategory, "6529 rep category name")
-	repAPIURL := flag.String("rep-api-url", rep6529.DefaultBaseURL, "6529 rep API base URL")
+	// 6529 Rep flags (kept for backwards compatibility; node filtering now uses on-chain card check)
+	_ = flag.Int64("rep-min", rep6529.DefaultMinRep, "Minimum 6529 rep to operate a node")
+	_ = flag.String("rep-category", rep6529.DefaultCategory, "6529 rep category name")
+	_ = flag.String("rep-api-url", rep6529.DefaultBaseURL, "6529 rep API base URL")
 	repCacheTTL := flag.Duration("rep-cache-ttl", 5*time.Minute, "6529 rep cache TTL")
 
 	// User ban check flags
@@ -242,17 +242,7 @@ func main() {
 		}
 		defer registry.Close()
 		srv.SetRegistry(registry)
-		log.Printf("Node registry enabled: %s", *nodeRegistryContract)
-
-		// Configure 6529 rep checker for node eligibility
-		repChecker := rep6529.NewChecker(rep6529.Config{
-			BaseURL:  *repAPIURL,
-			Category: *repCategory,
-			MinRep:   *repMinimum,
-			CacheTTL: *repCacheTTL,
-		})
-		srv.SetRepChecker(repChecker)
-		log.Printf("6529 rep filter enabled: category=%q min=%d", *repCategory, *repMinimum)
+		log.Printf("Node registry enabled: %s (card-gated)", *nodeRegistryContract)
 
 		// Start heartbeat sender if private key is provided (node operator mode)
 		if *heartbeatKey != "" {
@@ -331,8 +321,7 @@ func main() {
 	log.Printf("  WG Subnet:     %s", *wgSubnet)
 	log.Printf("  Delegation:    %v", *enableDelegation)
 	if *nodeRegistryContract != "" {
-		log.Printf("  NodeRegistry:  %s", *nodeRegistryContract)
-		log.Printf("  6529 Rep Min:  %d (%s)", *repMinimum, *repCategory)
+		log.Printf("  NodeRegistry:  %s (card-gated)", *nodeRegistryContract)
 	}
 	if *sessionManagerContract != "" {
 		log.Printf("  SessionMgr:    %s", *sessionManagerContract)

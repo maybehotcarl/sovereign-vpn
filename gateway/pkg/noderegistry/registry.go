@@ -121,6 +121,13 @@ const nodeRegistryABIJSON = `[
 		}],
 		"stateMutability": "view",
 		"type": "function"
+	},
+	{
+		"inputs": [{"name": "operator", "type": "address"}],
+		"name": "isEligibleOperator",
+		"outputs": [{"name": "", "type": "bool"}],
+		"stateMutability": "view",
+		"type": "function"
 	}
 ]`
 
@@ -264,6 +271,33 @@ func (r *Registry) IsHeartbeatOverdue(ctx context.Context, operator common.Addre
 		return false, fmt.Errorf("unexpected type: %T", results[0])
 	}
 	return overdue, nil
+}
+
+// IsEligibleOperator checks if an operator holds the required operator card on-chain.
+func (r *Registry) IsEligibleOperator(ctx context.Context, operator common.Address) (bool, error) {
+	callData, err := r.abi.Pack("isEligibleOperator", operator)
+	if err != nil {
+		return false, fmt.Errorf("packing call data: %w", err)
+	}
+
+	output, err := r.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &r.contractAddr,
+		Data: callData,
+	}, nil)
+	if err != nil {
+		return false, fmt.Errorf("calling isEligibleOperator: %w", err)
+	}
+
+	results, err := r.abi.Unpack("isEligibleOperator", output)
+	if err != nil {
+		return false, fmt.Errorf("unpacking isEligibleOperator: %w", err)
+	}
+
+	eligible, ok := results[0].(bool)
+	if !ok {
+		return false, fmt.Errorf("unexpected type: %T", results[0])
+	}
+	return eligible, nil
 }
 
 // InvalidateCache forces the next GetActiveNodes call to re-fetch from chain.

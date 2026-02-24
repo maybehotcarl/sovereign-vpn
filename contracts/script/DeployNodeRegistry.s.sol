@@ -11,13 +11,15 @@ contract DeployNodeRegistry is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
+        address memesContract = vm.envAddress("MEMES_CONTRACT");
+        uint256 operatorCardId = vm.envUint("OPERATOR_CARD_ID");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // 1. Deploy NodeRegistry
+        // 1. Deploy NodeRegistry (card-gated)
         //    - minStake: 0.01 ETH (testnet-friendly)
         //    - heartbeatInterval: 1 hour
-        NodeRegistry registry = new NodeRegistry(0.01 ether, 1 hours);
+        NodeRegistry registry = new NodeRegistry(0.01 ether, 1 hours, memesContract, operatorCardId);
         console.log("NodeRegistry deployed at:", address(registry));
 
         // 2. Deploy SessionManager

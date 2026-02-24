@@ -4,15 +4,18 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+/// @dev Minimal ERC-1155 interface -- we only need balanceOf
+interface IERC1155Minimal {
+    function balanceOf(address account, uint256 id) external view returns (uint256);
+}
+
 /// @title NodeRegistry
 /// @notice On-chain registry for Sovereign VPN node operators.
-///         Operators stake ETH and register their nodes. Reputation is managed
-///         off-chain via the 6529 community rep system — operators need 6,529
-///         "VPN Operator" rep (given by TDH holders) before the gateway routes
-///         traffic to them.
+///         Only holders of the designated operator card (Memes ERC-1155) can
+///         register and operate nodes. Stake requirement remains as defense in depth.
 /// @dev The contract handles staking, heartbeat liveness, and slashing.
-///      Reputation lives in the 6529 ecosystem at api.6529.io, not on-chain.
-///      The gateway checks rep via GET /profiles/{wallet}/rep/rating?category=VPN+Operator
+///      Card ownership is checked on register() and reactivate().
+///      heartbeat() skips the check to save gas; the gateway filters in real-time.
 contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     // =========================================================================
@@ -40,6 +43,12 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @notice Heartbeat interval: nodes must check in within this period.
     uint256 public heartbeatInterval;
+
+    /// @notice The Memes by 6529 ERC-1155 contract address.
+    address public immutable memesContract;
+
+    /// @notice Token ID of the operator card required to run a node.
+    uint256 public immutable operatorCardId;
 
     /// @notice All registered node IDs (operator addresses).
     address[] public nodeList;
@@ -82,6 +91,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     error InvalidEndpoint();
     error InvalidWgPubKey();
     error NoFundsToWithdraw();
+    error NotEligibleOperator();
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -89,19 +99,25 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @param _minStake Minimum ETH stake in wei (e.g., 0.01 ether for testnet)
     /// @param _heartbeatInterval Seconds between required heartbeats (e.g., 3600 = 1 hour)
-    constructor(uint256 _minStake, uint256 _heartbeatInterval) Ownable(msg.sender) {
+    /// @param _memesContract The Memes by 6529 ERC-1155 contract address
+    /// @param _operatorCardId Token ID of the card required to operate a node
+    constructor(
+        uint256 _minStake,
+        uint256 _heartbeatInterval,
+        address _memesContract,
+        uint256 _operatorCardId
+    ) Ownable(msg.sender) {
         minStake = _minStake;
         heartbeatInterval = _heartbeatInterval;
+        memesContract = _memesContract;
+        operatorCardId = _operatorCardId;
     }
 
     // =========================================================================
     //                          NODE OPERATOR FUNCTIONS
     // =========================================================================
 
-    /// @notice Register a new VPN node. Must send at least minStake ETH.
-    ///         NOTE: Registration is permissionless on-chain. The gateway additionally
-    ///         checks the operator's 6529 "VPN Operator" rep (>= 6,529) before
-    ///         routing any traffic to this node.
+    /// @notice Register a new VPN node. Must hold the operator card and send at least minStake ETH.
     /// @param endpoint Public WireGuard endpoint (e.g., "1.2.3.4:51820")
     /// @param wgPubKey WireGuard public key (base64)
     /// @param region Geographic region identifier
@@ -110,6 +126,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         string calldata wgPubKey,
         string calldata region
     ) external payable nonReentrant {
+        if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
         if (isRegistered[msg.sender]) revert AlreadyRegistered();
         if (msg.value < minStake) revert InsufficientStake(msg.value, minStake);
         if (bytes(endpoint).length == 0) revert InvalidEndpoint();
@@ -148,8 +165,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         emit NodeDeactivated(msg.sender);
     }
 
-    /// @notice Reactivate a previously deactivated node.
+    /// @notice Reactivate a previously deactivated node. Must still hold the operator card.
     function reactivate() external {
+        if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
         if (!isRegistered[msg.sender]) revert NotRegistered();
         if (nodes[msg.sender].active) revert NodeAlreadyActive();
         if (nodes[msg.sender].slashed) revert NodeSlashedCannotReactivate();
@@ -254,6 +272,11 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     //                          VIEW FUNCTIONS
     // =========================================================================
 
+    /// @notice Check if an operator currently holds the required operator card.
+    function isEligibleOperator(address operator) external view returns (bool) {
+        return IERC1155Minimal(memesContract).balanceOf(operator, operatorCardId) > 0;
+    }
+
     /// @notice Get the full node data for an operator.
     function getNode(address operator) external view returns (Node memory) {
         return nodes[operator];
@@ -270,7 +293,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Get all active nodes (for client node discovery).
-    ///         NOTE: The gateway further filters by 6529 "VPN Operator" rep >= 6,529.
+    ///         The gateway further filters by card ownership in real-time.
     function getActiveNodes() external view returns (Node[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < nodeList.length; i++) {

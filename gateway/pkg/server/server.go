@@ -30,7 +30,6 @@ type Server struct {
 	gate       *nftgate.Gate
 	wg         *wireguard.Manager
 	registry   *noderegistry.Registry
-	rep        *rep6529.Checker
 	userRep    *rep6529.Checker
 	sessionMgr *sessionmgr.Manager
 	subMgr     *subscriptionmgr.Manager
@@ -84,11 +83,6 @@ func (s *Server) SetChainID(chainID int) {
 // SetRegistry configures the node registry for node discovery endpoints.
 func (s *Server) SetRegistry(r *noderegistry.Registry) {
 	s.registry = r
-}
-
-// SetRepChecker configures the 6529 rep checker for node eligibility.
-func (s *Server) SetRepChecker(r *rep6529.Checker) {
-	s.rep = r
 }
 
 // SetUserRepChecker configures the 6529 rep checker for user ban checking.
@@ -584,17 +578,16 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 
 // NodeResponse is a public-facing node representation.
 type NodeResponse struct {
-	Operator    string `json:"operator"`
-	Endpoint    string `json:"endpoint"`
-	WgPubKey    string `json:"wg_pub_key"`
-	Region      string `json:"region"`
-	Rep         int64  `json:"rep"`          // 6529 "VPN Operator" rep
-	RepEligible bool   `json:"rep_eligible"` // whether rep >= required minimum
-	Active      bool   `json:"active"`
+	Operator     string `json:"operator"`
+	Endpoint     string `json:"endpoint"`
+	WgPubKey     string `json:"wg_pub_key"`
+	Region       string `json:"region"`
+	CardEligible bool   `json:"card_eligible"` // whether operator holds the required card
+	Active       bool   `json:"active"`
 }
 
 // GET /nodes — list all active VPN nodes from the on-chain registry.
-// Only returns nodes with sufficient 6529 "VPN Operator" rep.
+// Only returns nodes whose operators hold the required card.
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if s.registry == nil {
 		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
@@ -608,13 +601,12 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.enrichNodesWithRep(r.Context(), nodes)
+	resp := s.enrichNodesWithCardCheck(r.Context(), nodes)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":        resp,
-		"count":        len(resp),
-		"min_rep":      s.getMinRep(),
-		"rep_category": s.getRepCategory(),
+		"nodes": resp,
+		"count": len(resp),
+		"gate":  "card_ownership",
 	})
 }
 
@@ -638,19 +630,18 @@ func (s *Server) handleListNodesByRegion(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := s.enrichNodesWithRep(r.Context(), nodes)
+	resp := s.enrichNodesWithCardCheck(r.Context(), nodes)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":        resp,
-		"count":        len(resp),
-		"region":       region,
-		"min_rep":      s.getMinRep(),
-		"rep_category": s.getRepCategory(),
+		"nodes":  resp,
+		"count":  len(resp),
+		"region": region,
+		"gate":   "card_ownership",
 	})
 }
 
-// enrichNodesWithRep checks 6529 rep for each node and filters to eligible nodes only.
-func (s *Server) enrichNodesWithRep(ctx context.Context, nodes []noderegistry.Node) []NodeResponse {
+// enrichNodesWithCardCheck checks on-chain card ownership for each node and filters out ineligible.
+func (s *Server) enrichNodesWithCardCheck(ctx context.Context, nodes []noderegistry.Node) []NodeResponse {
 	var eligible []NodeResponse
 	for _, n := range nodes {
 		nr := NodeResponse{
@@ -661,43 +652,21 @@ func (s *Server) enrichNodesWithRep(ctx context.Context, nodes []noderegistry.No
 			Active:   n.Active,
 		}
 
-		// Check 6529 rep if checker is configured
-		if s.rep != nil {
-			result, err := s.rep.CheckRep(ctx, n.Operator.Hex())
-			if err != nil {
-				log.Printf("Error checking 6529 rep for %s: %v", n.Operator.Hex(), err)
-				// Include but mark as not eligible if check fails
-				nr.Rep = 0
-				nr.RepEligible = false
-			} else {
-				nr.Rep = result.Rating
-				nr.RepEligible = result.Eligible
-			}
+		// Check on-chain card ownership via NodeRegistry.isEligibleOperator
+		cardOk, err := s.registry.IsEligibleOperator(ctx, n.Operator)
+		if err != nil {
+			log.Printf("Error checking card eligibility for %s: %v", n.Operator.Hex(), err)
+			nr.CardEligible = false
 		} else {
-			// No rep checker configured — show all nodes without rep filtering
-			nr.RepEligible = true
+			nr.CardEligible = cardOk
 		}
 
-		// Only include rep-eligible nodes in the response
-		if nr.RepEligible {
+		// Only include card-eligible nodes in the response
+		if nr.CardEligible {
 			eligible = append(eligible, nr)
 		}
 	}
 	return eligible
-}
-
-func (s *Server) getMinRep() int64 {
-	if s.rep != nil {
-		return s.rep.MinRepRequired()
-	}
-	return 0
-}
-
-func (s *Server) getRepCategory() string {
-	if s.rep != nil {
-		return s.rep.Category()
-	}
-	return ""
 }
 
 // =========================================================================

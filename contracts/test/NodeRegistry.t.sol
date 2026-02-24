@@ -3,9 +3,11 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/NodeRegistry.sol";
+import "../src/TestMemes.sol";
 
 contract NodeRegistryTest is Test {
     NodeRegistry public registry;
+    TestMemes public memes;
 
     address public owner = address(this);
     address public operator1 = address(0x1);
@@ -15,9 +17,16 @@ contract NodeRegistryTest is Test {
 
     uint256 public constant MIN_STAKE = 0.01 ether;
     uint256 public constant HEARTBEAT_INTERVAL = 3600; // 1 hour
+    uint256 public constant OPERATOR_CARD_ID = 1;
 
     function setUp() public {
-        registry = new NodeRegistry(MIN_STAKE, HEARTBEAT_INTERVAL);
+        // Deploy TestMemes and mint operator card to test operators
+        memes = new TestMemes();
+        memes.mint(operator1, OPERATOR_CARD_ID, 1);
+        memes.mint(operator2, OPERATOR_CARD_ID, 1);
+        memes.mint(operator3, OPERATOR_CARD_ID, 1);
+
+        registry = new NodeRegistry(MIN_STAKE, HEARTBEAT_INTERVAL, address(memes), OPERATOR_CARD_ID);
 
         // Fund operators
         vm.deal(operator1, 10 ether);
@@ -471,5 +480,66 @@ contract NodeRegistryTest is Test {
         vm.expectEmit(true, false, false, true);
         emit NodeRegistry.NodeSlashed(operator1, 0.5 ether, 0.5 ether, "test slash");
         registry.slash(operator1, 50, "test slash");
+    }
+
+    // =========================================================================
+    //                          CARD-GATING (Option C)
+    // =========================================================================
+
+    function test_RegisterRevertsNotEligibleOperator() public {
+        // randomUser has no operator card
+        vm.deal(randomUser, 10 ether);
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.NotEligibleOperator.selector);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+    }
+
+    function test_IsEligibleOperator() public view {
+        // operator1 has the card
+        assertTrue(registry.isEligibleOperator(operator1));
+        // randomUser does not
+        assertFalse(registry.isEligibleOperator(randomUser));
+    }
+
+    function test_ReactivateRevertsIfCardTransferred() public {
+        // operator1 registers, deactivates, then transfers card away
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        registry.deactivate();
+
+        // Transfer operator card away
+        vm.prank(operator1);
+        memes.safeTransferFrom(operator1, randomUser, OPERATOR_CARD_ID, 1, "");
+
+        // Reactivation should fail — no longer holds card
+        vm.prank(operator1);
+        vm.expectRevert(NodeRegistry.NotEligibleOperator.selector);
+        registry.reactivate();
+    }
+
+    function test_RegisterAfterReceivingCard() public {
+        // randomUser starts without card, receives it, then registers
+        vm.deal(randomUser, 10 ether);
+
+        // Cannot register without card
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.NotEligibleOperator.selector);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        // Mint card to randomUser
+        memes.mint(randomUser, OPERATOR_CARD_ID, 1);
+
+        // Now registration succeeds
+        vm.prank(randomUser);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        assertTrue(registry.isRegistered(randomUser));
+    }
+
+    function test_ConstructorStoresMemesAndCardId() public view {
+        assertEq(registry.memesContract(), address(memes));
+        assertEq(registry.operatorCardId(), OPERATOR_CARD_ID);
     }
 }
