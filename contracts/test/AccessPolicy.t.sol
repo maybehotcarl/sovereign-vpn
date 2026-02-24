@@ -256,34 +256,6 @@ contract AccessPolicyTest is Test {
         policy.addKnownTokenId(100);
     }
 
-    function test_onlyOwnerCanAddCollection() public {
-        vm.prank(thisCardHolder);
-        vm.expectRevert();
-        policy.addCollection(address(0x999));
-    }
-
-    // =========================================================================
-    //                      ADDITIONAL COLLECTIONS
-    // =========================================================================
-
-    function test_addCollection() public {
-        address fakeCollection = address(0xFACE);
-        policy.addCollection(fakeCollection);
-        assertTrue(policy.additionalCollections(fakeCollection));
-    }
-
-    function test_removeCollection() public {
-        address fakeCollection = address(0xFACE);
-        policy.addCollection(fakeCollection);
-        policy.removeCollection(fakeCollection);
-        assertFalse(policy.additionalCollections(fakeCollection));
-    }
-
-    function test_addCollection_zeroAddress() public {
-        vm.expectRevert(AccessPolicy.ZeroAddress.selector);
-        policy.addCollection(address(0));
-    }
-
     // =========================================================================
     //                      CONSTRUCTOR
     // =========================================================================

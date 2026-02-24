@@ -131,6 +131,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     /// @param duration Session duration in seconds
     /// @return sessionId The created session ID
     function openSession(address node, uint256 duration) external payable nonReentrant returns (uint256 sessionId) {
+        if (node == address(0)) revert ZeroAddress();
         if (activeSession[msg.sender] != 0) revert SessionAlreadyActive();
         if (duration == 0 || duration > maxSessionDuration) revert InvalidDuration();
 
@@ -142,7 +143,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
         sessions[sessionId] = Session({
             user: msg.sender,
             node: node,
-            payment: msg.value,
+            payment: required,
             startedAt: block.timestamp,
             duration: duration,
             active: true,
@@ -151,9 +152,16 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
 
         activeSession[msg.sender] = sessionId;
         totalSessions++;
-        totalRevenue += msg.value;
+        totalRevenue += required;
 
-        emit SessionOpened(sessionId, msg.sender, node, msg.value, duration);
+        // Refund overpayment
+        uint256 refund = msg.value - required;
+        if (refund > 0) {
+            (bool sent, ) = msg.sender.call{value: refund}("");
+            require(sent, "ETH refund failed");
+        }
+
+        emit SessionOpened(sessionId, msg.sender, node, required, duration);
     }
 
     /// @notice Open a free-tier session (no payment required).
@@ -163,6 +171,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     /// @param duration Session duration in seconds
     /// @return sessionId The created session ID
     function openFreeSession(address user, address node, uint256 duration) external onlyOwner returns (uint256 sessionId) {
+        if (node == address(0)) revert ZeroAddress();
         if (activeSession[user] != 0) revert SessionAlreadyActive();
         if (duration == 0 || duration > maxSessionDuration) revert InvalidDuration();
 
@@ -207,9 +216,15 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
 
             // Route operator share to PayoutVault (RAILGUN) if configured,
             // otherwise accumulate locally for legacy withdrawal.
+            // Uses try/catch so a paused/broken vault cannot brick session close.
             if (operatorPayout > 0) {
                 if (payoutVault != address(0)) {
-                    IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(s.node);
+                    try IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(s.node) {
+                        // credited to vault
+                    } catch {
+                        // vault reverted (paused, etc.) — fall back to local balance
+                        operatorBalance[s.node] += operatorPayout;
+                    }
                 } else {
                     operatorBalance[s.node] += operatorPayout;
                 }

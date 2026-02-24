@@ -122,6 +122,7 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
     /// @param node The node operator address to connect to
     /// @param tierId The subscription tier ID
     function subscribe(address node, uint8 tierId) external payable nonReentrant {
+        if (node == address(0)) revert ZeroAddress();
         // Must not have an active subscription
         Subscription storage existing = subscriptions[msg.sender];
         if (existing.expiresAt > block.timestamp) revert AlreadySubscribed();
@@ -136,19 +137,26 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
         subscriptions[msg.sender] = Subscription({
             user: msg.sender,
             node: node,
-            payment: msg.value,
+            payment: t.price,
             startedAt: block.timestamp,
             expiresAt: expiresAt,
             tier: tierId
         });
 
-        // Distribute payment immediately (80/20 split)
-        _distributePayment(node, msg.value);
+        // Distribute payment immediately
+        _distributePayment(node, t.price);
 
         totalSubscriptions++;
-        totalRevenue += msg.value;
+        totalRevenue += t.price;
 
-        emit Subscribed(msg.sender, node, tierId, msg.value, expiresAt);
+        // Refund overpayment
+        uint256 refund = msg.value - t.price;
+        if (refund > 0) {
+            (bool sent, ) = msg.sender.call{value: refund}("");
+            require(sent, "ETH refund failed");
+        }
+
+        emit Subscribed(msg.sender, node, tierId, t.price, expiresAt);
     }
 
     /// @notice Renew or extend a subscription. Stacks on top of remaining time.
@@ -178,17 +186,24 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
 
         sub.user = msg.sender;
         sub.node = effectiveNode;
-        sub.payment = msg.value;
+        sub.payment = t.price;
         sub.startedAt = block.timestamp;
         sub.expiresAt = newExpiresAt;
         sub.tier = tierId;
 
         // Distribute payment immediately
-        _distributePayment(effectiveNode, msg.value);
+        _distributePayment(effectiveNode, t.price);
 
-        totalRevenue += msg.value;
+        totalRevenue += t.price;
 
-        emit Renewed(msg.sender, effectiveNode, tierId, msg.value, newExpiresAt);
+        // Refund overpayment
+        uint256 refund = msg.value - t.price;
+        if (refund > 0) {
+            (bool sent, ) = msg.sender.call{value: refund}("");
+            require(sent, "ETH refund failed");
+        }
+
+        emit Renewed(msg.sender, effectiveNode, tierId, t.price, newExpiresAt);
     }
 
     // =========================================================================
@@ -327,9 +342,15 @@ contract SubscriptionManager is Ownable2Step, ReentrancyGuard {
         uint256 operatorPayout = (amount * operatorShareBps) / 10000;
         uint256 treasuryPayout = amount - operatorPayout;
 
+        // Uses try/catch so a paused/broken vault cannot brick subscriptions.
         if (operatorPayout > 0) {
             if (payoutVault != address(0)) {
-                IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(node);
+                try IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(node) {
+                    // credited to vault
+                } catch {
+                    // vault reverted (paused, etc.) — fall back to local balance
+                    operatorBalance[node] += operatorPayout;
+                }
             } else {
                 operatorBalance[node] += operatorPayout;
             }

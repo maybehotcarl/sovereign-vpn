@@ -52,14 +52,18 @@ contract SessionManagerTest is Test {
         assertFalse(s.settled);
     }
 
-    function test_OpenSessionOverpay() public {
-        // Overpaying is allowed — excess is held for operator
+    function test_OpenSessionOverpayRefunded() public {
+        uint256 balBefore = user1.balance;
         vm.prank(user1);
         uint256 sessionId = sm.openSession{value: 0.01 ether}(nodeOp, 3600);
         assertEq(sessionId, 1);
 
+        // Only the required amount (0.001 ETH for 1hr) is stored
         SessionManager.Session memory s = sm.getSession(1);
-        assertEq(s.payment, 0.01 ether);
+        assertEq(s.payment, 0.001 ether);
+
+        // Overpayment (0.009 ETH) refunded
+        assertEq(user1.balance, balBefore - 0.001 ether);
     }
 
     function test_OpenSessionRevertsInsufficientPayment() public {

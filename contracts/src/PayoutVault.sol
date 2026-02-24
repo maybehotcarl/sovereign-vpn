@@ -93,13 +93,6 @@ contract PayoutVault is Ownable2Step, ReentrancyGuard {
     }
 
     // =========================================================================
-    //                          RECEIVE
-    // =========================================================================
-
-    /// @notice Accept plain ETH transfers.
-    receive() external payable {}
-
-    // =========================================================================
     //                          CREDITING (called by SessionManager / SubscriptionManager)
     // =========================================================================
 
@@ -183,9 +176,14 @@ contract PayoutVault is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Emergency withdraw all ETH to owner.
+    ///         Resets totalPending to 0. Individual pendingPayouts mappings become
+    ///         stale but cannot be processed (no ETH to send). Re-crediting after
+    ///         re-funding requires manual reconciliation off-chain.
     function emergencyWithdrawETH() external onlyOwner nonReentrant {
         uint256 balance = address(this).balance;
         if (balance == 0) revert ZeroAmount();
+
+        totalPending = 0;
 
         (bool sent, ) = owner().call{value: balance}("");
         if (!sent) revert TransferFailed();

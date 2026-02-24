@@ -262,10 +262,9 @@ contract PayoutVaultTest is Test {
     //                          RECEIVE
     // =========================================================================
 
-    function test_ReceiveETH() public {
+    function test_DirectETHTransferReverts() public {
         (bool sent, ) = address(vault).call{value: 1 ether}("");
-        assertTrue(sent);
-        assertEq(address(vault).balance, 1 ether);
+        assertFalse(sent);
     }
 
     // =========================================================================

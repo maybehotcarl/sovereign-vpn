@@ -28,14 +28,10 @@ contract AccessPolicy is Ownable2Step {
     /// @notice Whether thisCardTokenId has been permanently locked.
     bool public thisCardTokenIdLocked;
 
-    /// @notice Token IDs to check for general access. If empty, ANY token ID with balance > 0 grants access.
-    ///         For efficiency, we maintain a list of known token IDs to check.
+    /// @notice Token IDs to check for general access. If empty, no access is granted.
+    ///         Populate via addKnownTokenId() for each Memes card that should grant VPN access.
     uint256[] public knownTokenIds;
     mapping(uint256 => bool) public isKnownTokenId;
-
-    /// @notice Additional NFT collections that grant access (future expansion via governance).
-    ///         collection address => whether it grants access
-    mapping(address => bool) public additionalCollections;
 
     // -- Events --
 
@@ -43,8 +39,6 @@ contract AccessPolicy is Ownable2Step {
     event ThisCardTokenIdLocked();
     event KnownTokenIdAdded(uint256 tokenId);
     event KnownTokenIdRemoved(uint256 tokenId);
-    event CollectionAdded(address indexed collection);
-    event CollectionRemoved(address indexed collection);
 
     // -- Errors --
 
@@ -94,10 +88,6 @@ contract AccessPolicy is Ownable2Step {
         if (_holdsAnyMemesCard(user)) {
             return (true, false);
         }
-
-        // Check additional collections
-        // Note: additional collections grant paid access only, not free
-        // (free tier is exclusively for THIS card holders)
 
         return (false, false);
     }
@@ -152,21 +142,6 @@ contract AccessPolicy is Ownable2Step {
             }
         }
         emit KnownTokenIdRemoved(tokenId);
-    }
-
-    /// @notice Add an additional NFT collection that grants paid VPN access.
-    /// @param collection The ERC-1155 or ERC-721 contract address
-    function addCollection(address collection) external onlyOwner {
-        if (collection == address(0)) revert ZeroAddress();
-        additionalCollections[collection] = true;
-        emit CollectionAdded(collection);
-    }
-
-    /// @notice Remove an additional collection.
-    /// @param collection The contract address to remove
-    function removeCollection(address collection) external onlyOwner {
-        additionalCollections[collection] = false;
-        emit CollectionRemoved(collection);
     }
 
     // =========================================================================
