@@ -21,6 +21,15 @@ export interface Config {
   /** BIP-39 mnemonic for deriving the RAILGUN wallet */
   railgunMnemonic: string;
 
+  /** WETH contract address (chain-dependent) */
+  wethAddress: string;
+  /** LevelDB path for RAILGUN wallet state */
+  railgunDbPath: string;
+  /** Path for ZK proving key artifacts */
+  railgunArtifactsPath: string;
+  /** Private Proof of Innocence node URLs */
+  railgunPoiNodes: string[];
+
   /** Cron expression controlling when payout cycles run (default: weekly on Sunday midnight) */
   payoutCron: string;
   /** Minimum pending payout (in wei) before an operator is included in a cycle */
@@ -85,6 +94,22 @@ export function loadConfig(): Config {
 
   const railgunMnemonic = optionalEnv("RAILGUN_MNEMONIC", "");
 
+  const wethAddress = optionalEnv(
+    "WETH_ADDRESS",
+    "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", // Sepolia default
+  );
+  if (wethAddress && !isValidAddress(wethAddress)) {
+    throw new Error(`WETH_ADDRESS is not a valid Ethereum address: ${wethAddress}`);
+  }
+
+  const railgunDbPath = optionalEnv("RAILGUN_DB_PATH", "./data/railgun-db");
+  const railgunArtifactsPath = optionalEnv("RAILGUN_ARTIFACTS_PATH", "./data/railgun-artifacts");
+
+  const railgunPoiNodesRaw = optionalEnv("RAILGUN_POI_NODES", "");
+  const railgunPoiNodes = railgunPoiNodesRaw
+    ? railgunPoiNodesRaw.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+
   const payoutCron = optionalEnv("PAYOUT_CRON", "0 0 * * 0");
 
   const minPayoutWeiRaw = optionalEnv("MIN_PAYOUT_WEI", "10000000000000000"); // 0.01 ETH
@@ -114,6 +139,10 @@ export function loadConfig(): Config {
     nodeRegistryAddress,
     executorPrivateKey,
     railgunMnemonic,
+    wethAddress,
+    railgunDbPath,
+    railgunArtifactsPath,
+    railgunPoiNodes,
     payoutCron,
     minPayoutWei,
     dryRun,

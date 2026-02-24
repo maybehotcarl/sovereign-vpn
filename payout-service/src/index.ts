@@ -5,6 +5,7 @@ import type { ScheduledTask } from "node-cron";
 import { loadConfig, type Config } from "./config.js";
 import { createVaultContract } from "./vault.js";
 import { createRegistryContract } from "./registry.js";
+import { createExecutorWallet } from "./wallet.js";
 import { initRailgunEngine } from "./railgun/engine.js";
 import { PayoutProcessor } from "./payout/processor.js";
 import { ReceiptStore } from "./receipts/store.js";
@@ -132,10 +133,14 @@ async function main(): Promise<void> {
     config.nodeRegistryAddress,
   );
 
-  // 3. Initialize RAILGUN engine (stub)
+  // 3. Create executor wallet (shared between vault and RAILGUN operations)
+  const executorWallet = createExecutorWallet(config.ethRpcUrl, config.executorPrivateKey);
+  console.log(`[main] Executor wallet: ${executorWallet.address}`);
+
+  // 4. Initialize RAILGUN engine
   await initRailgunEngine(config);
 
-  // 4. Initialize receipt store
+  // 5. Initialize receipt store
   const dbPath = process.env["RECEIPT_DB_PATH"] ?? "./data/receipts.db";
   try {
     receiptStore = new ReceiptStore(dbPath);
@@ -145,13 +150,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 5. Create payout processor
-  processor = new PayoutProcessor(config, vaultContract, registryContract, receiptStore);
+  // 6. Create payout processor
+  processor = new PayoutProcessor(config, vaultContract, registryContract, receiptStore, executorWallet);
 
-  // 6. Start health server
+  // 7. Start health server
   healthServer = startHealthServer(config.healthPort, getHealthStatus);
 
-  // 7. Schedule cron job
+  // 8. Schedule cron job
   if (!cron.validate(config.payoutCron)) {
     console.error(`[main] Invalid cron expression: ${config.payoutCron}`);
     process.exit(1);
@@ -168,11 +173,11 @@ async function main(): Promise<void> {
   console.log(`[main] Cron job scheduled: ${config.payoutCron}`);
   console.log("[main] Payout service is running. Press Ctrl+C to stop.\n");
 
-  // 8. Register signal handlers
+  // 9. Register signal handlers
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  // 9. Optionally run an immediate cycle on startup
+  // 10. Optionally run an immediate cycle on startup
   if (process.env["RUN_ON_STARTUP"] === "true") {
     console.log("[main] RUN_ON_STARTUP=true, executing immediate payout cycle...");
     await runCycle();

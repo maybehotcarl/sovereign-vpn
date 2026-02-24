@@ -1,4 +1,4 @@
-import type { Contract } from "ethers";
+import type { Contract, Wallet } from "ethers";
 import type { Config } from "../config.js";
 import {
   getPendingPayouts,
@@ -6,6 +6,7 @@ import {
   isPaused,
 } from "../vault.js";
 import { getOperatorsWithRailgun } from "../registry.js";
+import { syncMerkleTree, isRailgunReady } from "../railgun/engine.js";
 import { shieldETH } from "../railgun/shield.js";
 import { sendPrivateTransfer } from "../railgun/transfer.js";
 import { batchOperators, MAX_BATCH_SIZE } from "./batch.js";
@@ -49,6 +50,7 @@ export class PayoutProcessor {
   private readonly vaultContract: Contract;
   private readonly registryContract: Contract;
   private readonly receiptStore: ReceiptStore | null;
+  private readonly executorWallet: Wallet | null;
   private lastCycleResult: PayoutCycleResult | null = null;
 
   constructor(
@@ -56,11 +58,13 @@ export class PayoutProcessor {
     vaultContract: Contract,
     registryContract: Contract,
     receiptStore: ReceiptStore | null = null,
+    executorWallet: Wallet | null = null,
   ) {
     this.config = config;
     this.vaultContract = vaultContract;
     this.registryContract = registryContract;
     this.receiptStore = receiptStore;
+    this.executorWallet = executorWallet;
   }
 
   /**
@@ -72,11 +76,12 @@ export class PayoutProcessor {
 
   /**
    * Run a full payout cycle:
-   *   1. Query pending payouts above threshold
-   *   2. Match operators to RAILGUN addresses
-   *   3. Process batch payout on-chain
-   *   4. Shield and privately transfer (TODO: RAILGUN integration)
-   *   5. Record receipts
+   *   1. Sync RAILGUN Merkle tree
+   *   2. Query pending payouts above threshold
+   *   3. Process batch payout on-chain (vault → executor)
+   *   4. Shield ETH into RAILGUN
+   *   5. Send private transfers to operators' 0zk addresses
+   *   6. Record receipts
    */
   async runPayoutCycle(): Promise<PayoutCycleResult> {
     const startedAt = new Date();
@@ -94,6 +99,11 @@ export class PayoutProcessor {
     };
 
     try {
+      // --- Pre-flight: Sync Merkle tree ---
+      if (isRailgunReady()) {
+        await syncMerkleTree();
+      }
+
       // --- Pre-flight checks ---
       const vaultPaused = await isPaused(this.vaultContract);
       if (vaultPaused) {
@@ -136,7 +146,7 @@ export class PayoutProcessor {
         return result;
       }
 
-      // --- Step 2: Process batch payout on-chain ---
+      // --- Step 2: Process batch payout on-chain (vault → executor) ---
       const batches = batchOperators(eligible, MAX_BATCH_SIZE);
       console.log(
         `[processor] Split into ${batches.length} batch(es) of max ${MAX_BATCH_SIZE}`,
@@ -173,53 +183,80 @@ export class PayoutProcessor {
         }
       }
 
-      // --- Step 3: Shield received ETH via RAILGUN (TODO) ---
-      //
-      // After processBatchPayout, the executor wallet holds the sum of all
-      // payout amounts as ETH. We need to shield it into RAILGUN:
-      //
-      //   const shieldResult = await shieldETH(result.totalAmount, railgunWalletId);
-      //
-      // For now we log a placeholder:
-      if (result.successCount > 0) {
+      // --- Step 3: Shield ETH into RAILGUN ---
+      if (result.successCount > 0 && isRailgunReady() && this.executorWallet) {
         console.log(
-          `[processor] TODO: Shield ${result.totalAmount} wei into RAILGUN`,
+          `[processor] Shielding ${result.totalAmount} wei into RAILGUN...`,
         );
-        const _shieldResult = await shieldETH(result.totalAmount, "TODO_WALLET_ID");
-        if (!_shieldResult.success) {
-          console.warn(
-            `[processor] Shield stub returned: ${_shieldResult.error}`,
-          );
-        }
-      }
 
-      // --- Step 4: Send private transfers to each operator (TODO) ---
-      //
-      // After shielding, send individual private transfers:
-      //
-      //   for (const op of eligible) {
-      //     await sendPrivateTransfer(walletId, op.railgunAddress, op.pendingAmount, WETH);
-      //   }
-      //
-      if (result.successCount > 0) {
-        console.log(
-          `[processor] TODO: Send ${eligible.length} private transfers via RAILGUN`,
+        const shieldResult = await shieldETH(
+          result.totalAmount,
+          this.executorWallet,
+          this.config,
         );
-        for (const op of eligible) {
-          if (op.railgunAddress) {
-            const _transferResult = await sendPrivateTransfer(
-              "TODO_WALLET_ID",
+
+        if (!shieldResult.success) {
+          console.error(
+            `[processor] Shield failed: ${shieldResult.error}. ` +
+            "ETH stays as WETH in executor wallet for manual handling.",
+          );
+        } else {
+          console.log(`[processor] Shield confirmed: ${shieldResult.txHash}`);
+
+          // --- Step 4: Send private transfers to each operator ---
+          // Sync merkle tree again to pick up the new shield commitment
+          console.log("[processor] Waiting for shield commitment propagation...");
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          await syncMerkleTree();
+
+          let transferSuccessCount = 0;
+          let transferFailureCount = 0;
+
+          for (const op of eligible) {
+            if (!op.railgunAddress) continue;
+
+            console.log(
+              `[processor] Sending private transfer to ${op.address} (${op.railgunAddress})...`,
+            );
+
+            const transferResult = await sendPrivateTransfer(
               op.railgunAddress,
               op.pendingAmount,
-              "TODO_WETH_ADDRESS",
+              this.config.wethAddress,
+              this.executorWallet,
+              this.config.chainId,
             );
-            if (!_transferResult.success) {
-              console.warn(
-                `[processor] Transfer stub for ${op.address}: ${_transferResult.error}`,
+
+            if (transferResult.success) {
+              transferSuccessCount++;
+              // Update receipt with RAILGUN tx ID
+              this.recordReceipt(op, transferResult.txHash ?? "", transferResult.railgunTxId);
+              console.log(
+                `[processor] Transfer to ${op.address} confirmed: ${transferResult.txHash}`,
+              );
+            } else {
+              transferFailureCount++;
+              console.error(
+                `[processor] Transfer to ${op.address} failed: ${transferResult.error}`,
               );
             }
           }
+
+          console.log(
+            `[processor] Private transfers complete: ${transferSuccessCount} succeeded, ` +
+            `${transferFailureCount} failed`,
+          );
         }
+      } else if (result.successCount > 0 && !isRailgunReady()) {
+        console.warn(
+          "[processor] RAILGUN not initialized. ETH stays in executor wallet. " +
+          "Set RAILGUN_MNEMONIC to enable private transfers.",
+        );
+      } else if (result.successCount > 0 && !this.executorWallet) {
+        console.warn(
+          "[processor] No executor wallet available for RAILGUN operations. " +
+          "ETH stays in executor wallet.",
+        );
       }
     } catch (err) {
       console.error("[processor] Payout cycle failed with unhandled error:", err);

@@ -1,4 +1,5 @@
-import { Contract, JsonRpcProvider, Wallet, type ContractTransactionResponse } from "ethers";
+import { Contract, type ContractTransactionResponse } from "ethers";
+import { createExecutorWallet } from "./wallet.js";
 
 // ---------------------------------------------------------------------------
 // PayoutVault ABI (minimal interface consumed by the payout service)
@@ -51,8 +52,7 @@ export function createVaultContract(
   address: string,
   privateKey: string,
 ): Contract {
-  const provider = new JsonRpcProvider(rpcUrl);
-  const wallet = new Wallet(privateKey, provider);
+  const wallet = createExecutorWallet(rpcUrl, privateKey);
   return new Contract(address, PAYOUT_VAULT_ABI, wallet);
 }
 

@@ -1,107 +1,73 @@
+import type { Wallet } from "ethers";
+import {
+  generateTransferProof,
+  populateProvedTransfer,
+} from "@railgun-community/wallet";
+import {
+  NetworkName,
+  TXIDVersion,
+  EVMGasType,
+  type RailgunERC20AmountRecipient,
+  type TransactionGasDetails,
+} from "@railgun-community/shared-models";
+import { getWalletId, getEncryptionKey } from "./engine.js";
+
 // ---------------------------------------------------------------------------
-// RAILGUN Private Transfer (Stub)
-// ---------------------------------------------------------------------------
-//
-// Private transfers move tokens from one RAILGUN shielded balance to another
-// (0zk -> 0zk). This is a fully private transfer: the sender, receiver, and
-// amount are all hidden on-chain. Only a zero-knowledge proof is posted.
-//
-// This is the final step in the payout pipeline -- after the executor shields
-// ETH, it sends private transfers to each operator's 0zk address.
-//
-// TODO: Implement using @railgun-community/wallet SDK.
+// Types
 // ---------------------------------------------------------------------------
 
 export interface PrivateTransferResult {
-  /** Whether the private transfer succeeded */
   success: boolean;
-  /** RAILGUN internal transaction ID */
   railgunTxId?: string;
-  /** On-chain transaction hash for the proof submission */
   txHash?: string;
-  /** Error message if the operation failed */
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function chainIdToNetworkName(chainId: number): NetworkName {
+  switch (chainId) {
+    case 1:
+      return NetworkName.Ethereum;
+    case 56:
+      return NetworkName.BNBChain;
+    case 137:
+      return NetworkName.Polygon;
+    case 42161:
+      return NetworkName.Arbitrum;
+    case 11155111:
+      return NetworkName.EthereumSepolia;
+    default:
+      throw new Error(`Unsupported chain ID for RAILGUN: ${chainId}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Private Transfer
+// ---------------------------------------------------------------------------
+
 /**
- * Send a private (0zk-to-0zk) transfer within RAILGUN.
+ * Send a private (0zk-to-0zk) transfer of shielded WETH within RAILGUN.
  *
- * Real implementation would:
- *   1. Build the transfer inputs (from shielded balance)
- *   2. Generate the zero-knowledge proof (CPU-intensive, ~10-30s)
- *   3. Submit the proof transaction on-chain
- *   4. Wait for confirmation
- *
- * Example SDK flow:
- * ```ts
- * import {
- *   gasEstimateForUnprovenTransfer,
- *   generateTransferProof,
- *   populateProvedTransfer,
- * } from "@railgun-community/wallet";
- *
- * const erc20AmountRecipients = [{
- *   tokenAddress: WETH_ADDRESS,            // shielded WETH
- *   amount: amount.toString(),              // in wei
- *   recipientAddress: toRailgunAddress,     // 0zk... address
- * }];
- *
- * // Step 1: Gas estimate (also validates inputs)
- * const { gasEstimate } = await gasEstimateForUnprovenTransfer(
- *   NetworkName.Ethereum,
- *   railgunWalletId,
- *   encryptionKey,
- *   false,                    // not a relayer fee
- *   erc20AmountRecipients,
- *   [], // no NFTs
- *   undefined,                // original gas estimate
- *   undefined,                // fee token details
- *   false,                    // sendWithPublicWallet
- * );
- *
- * // Step 2: Generate ZK proof
- * await generateTransferProof(
- *   NetworkName.Ethereum,
- *   railgunWalletId,
- *   encryptionKey,
- *   false,
- *   erc20AmountRecipients,
- *   [],
- *   undefined,
- *   false,
- *   (progress) => console.log(`Proof generation: ${progress}%`),
- * );
- *
- * // Step 3: Populate the proved transaction
- * const { transaction } = await populateProvedTransfer(
- *   NetworkName.Ethereum,
- *   railgunWalletId,
- *   false,
- *   erc20AmountRecipients,
- *   [],
- *   undefined,
- *   false,
- *   gasEstimate,
- * );
- *
- * // Step 4: Submit on-chain
- * const tx = await wallet.sendTransaction(transaction);
- * const receipt = await tx.wait();
- * ```
- *
- * @param _fromWalletId The RAILGUN wallet ID holding the shielded tokens
- * @param toRailgunAddress The recipient's 0zk address
- * @param amount Amount to send (in wei for WETH / smallest unit for ERC-20)
- * @param _tokenAddress The ERC-20 token to transfer (e.g., WETH address)
+ * Flow:
+ *   1. Validate 0zk address
+ *   2. Build recipients
+ *   3. Generate ZK proof (~10-30s)
+ *   4. Populate proved transaction
+ *   5. Submit on-chain via executor wallet
  */
 export async function sendPrivateTransfer(
-  _fromWalletId: string,
   toRailgunAddress: string,
   amount: bigint,
-  _tokenAddress: string,
+  wethAddress: string,
+  walletSigner: Wallet,
+  chainId: number,
+  sendWithPublicWallet: boolean = true,
 ): Promise<PrivateTransferResult> {
   console.log(
-    `[railgun/transfer] Private transfer of ${amount} to ${toRailgunAddress} (stub)`,
+    `[railgun/transfer] Private transfer of ${amount} wei to ${toRailgunAddress}`,
   );
 
   // Validate the recipient address format
@@ -112,21 +78,87 @@ export async function sendPrivateTransfer(
     };
   }
 
-  // TODO: Replace with actual SDK transfer implementation
-  //
-  // Important considerations:
-  // - Proof generation is CPU-intensive (~10-30 seconds per transfer)
-  // - Transfers should be batched where possible to save gas
-  // - The prover needs access to the full UTXO Merkle tree
-  // - Private transfers use Proof of Innocence (POI) to prevent
-  //   sanctioned addresses from using the system
-  // - The relayer can optionally be used to pay gas from shielded
-  //   balance (further improving privacy)
+  try {
+    const networkNameValue = chainIdToNetworkName(chainId);
+    const walletId = getWalletId();
+    const encKey = getEncryptionKey();
 
-  console.warn("[railgun/transfer] Private transfer not yet implemented");
+    // Build recipients
+    const erc20AmountRecipients: RailgunERC20AmountRecipient[] = [
+      {
+        tokenAddress: wethAddress,
+        amount,
+        recipientAddress: toRailgunAddress,
+      },
+    ];
 
-  return {
-    success: false,
-    error: "RAILGUN SDK integration not yet implemented",
-  };
+    // Generate ZK proof (CPU-intensive, ~10-30 seconds)
+    console.log("[railgun/transfer] Generating ZK proof...");
+    await generateTransferProof(
+      TXIDVersion.V2_PoseidonMerkle,
+      networkNameValue,
+      walletId,
+      encKey,
+      false,                        // showSenderAddressToRecipient
+      undefined,                    // memoText
+      erc20AmountRecipients,
+      [],                           // no NFTs
+      undefined,                    // no broadcaster fee
+      sendWithPublicWallet,
+      undefined,                    // overallBatchMinGasPrice
+      (progress: number, status: string) => {
+        console.log(`[railgun/transfer] Proof progress: ${progress}% - ${status}`);
+      },
+    );
+    console.log("[railgun/transfer] Proof generated");
+
+    // Estimate gas
+    const feeData = await walletSigner.provider!.getFeeData();
+    const gasDetails: TransactionGasDetails = feeData.maxFeePerGas
+      ? {
+          evmGasType: EVMGasType.Type2,
+          gasEstimate: 1_500_000n, // generous estimate for proved transfer
+          maxFeePerGas: feeData.maxFeePerGas,
+          maxPriorityFeePerGas: feeData.maxPriorityFeePerGas ?? 1_500_000_000n,
+        }
+      : {
+          evmGasType: EVMGasType.Type0,
+          gasEstimate: 1_500_000n,
+          gasPrice: feeData.gasPrice ?? 20_000_000_000n,
+        };
+
+    // Populate the proved transfer transaction
+    console.log("[railgun/transfer] Populating proved transfer...");
+    const { transaction } = await populateProvedTransfer(
+      TXIDVersion.V2_PoseidonMerkle,
+      networkNameValue,
+      walletId,
+      false,                        // showSenderAddressToRecipient
+      undefined,                    // memoText
+      erc20AmountRecipients,
+      [],                           // no NFTs
+      undefined,                    // no broadcaster fee
+      sendWithPublicWallet,
+      undefined,                    // overallBatchMinGasPrice
+      gasDetails,
+    );
+
+    // Submit on-chain
+    console.log("[railgun/transfer] Submitting transfer transaction...");
+    const tx = await walletSigner.sendTransaction(transaction);
+    const receipt = await tx.wait();
+    const txHash = receipt?.hash ?? tx.hash;
+
+    console.log(`[railgun/transfer] Transfer confirmed: ${txHash}`);
+
+    return {
+      success: true,
+      txHash,
+      railgunTxId: txHash, // use on-chain hash as identifier
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[railgun/transfer] Transfer failed:`, message);
+    return { success: false, error: message };
+  }
 }

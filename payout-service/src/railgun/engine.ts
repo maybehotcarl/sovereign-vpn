@@ -1,70 +1,111 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pbkdf2Sync } from "node:crypto";
+import LevelDOWN from "leveldown";
+import {
+  startRailgunEngine,
+  loadProvider,
+  createRailgunWallet,
+  refreshBalances,
+  ArtifactStore,
+} from "@railgun-community/wallet";
+import {
+  NetworkName,
+  NETWORK_CONFIG,
+} from "@railgun-community/shared-models";
 import type { Config } from "../config.js";
 
 // ---------------------------------------------------------------------------
-// RAILGUN Engine Initialization (Stub)
-// ---------------------------------------------------------------------------
-//
-// This module provides the scaffolding for initializing the RAILGUN privacy
-// engine. Actual SDK integration requires:
-//
-//   @railgun-community/engine       - Core proving engine
-//   @railgun-community/wallet       - Wallet management / key derivation
-//   @railgun-community/node-services - Merkle tree sync, POI, etc.
-//
-// The SDK dependencies are NOT included in package.json yet because they
-// require specific network artifacts (proving keys, circuit files) that
-// must be downloaded separately. These stubs document the intended flow.
-//
-// TODO: Install RAILGUN SDK packages and replace stubs with real calls.
+// Types
 // ---------------------------------------------------------------------------
 
 export interface RailgunEngineState {
   initialized: boolean;
   merkleTreeSynced: boolean;
   networkName: string;
+  walletId: string;
+  railgunAddress: string;
 }
+
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
 
 const state: RailgunEngineState = {
   initialized: false,
   merkleTreeSynced: false,
   networkName: "",
+  walletId: "",
+  railgunAddress: "",
 };
 
+let encryptionKey = "";
+let networkName: NetworkName = NetworkName.EthereumSepolia;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function chainIdToNetworkName(chainId: number): NetworkName {
+  switch (chainId) {
+    case 1:
+      return NetworkName.Ethereum;
+    case 56:
+      return NetworkName.BNBChain;
+    case 137:
+      return NetworkName.Polygon;
+    case 42161:
+      return NetworkName.Arbitrum;
+    case 11155111:
+      return NetworkName.EthereumSepolia;
+    default:
+      throw new Error(`Unsupported chain ID for RAILGUN: ${chainId}`);
+  }
+}
+
+function deriveEncryptionKey(mnemonic: string): string {
+  const salt = "railgun-payout-service";
+  return pbkdf2Sync(mnemonic, salt, 100000, 32, "sha256").toString("hex");
+}
+
+function createArtifactStore(artifactsDir: string): ArtifactStore {
+  return new ArtifactStore(
+    async (artifactPath: string) => {
+      const fullPath = path.join(artifactsDir, artifactPath);
+      try {
+        return await fs.promises.readFile(fullPath);
+      } catch {
+        return null;
+      }
+    },
+    async (dir: string, artifactPath: string, item: string | Uint8Array) => {
+      const fullDir = path.join(artifactsDir, dir);
+      await fs.promises.mkdir(fullDir, { recursive: true });
+      const fullPath = path.join(artifactsDir, artifactPath);
+      await fs.promises.writeFile(fullPath, item);
+    },
+    async (artifactPath: string) => {
+      const fullPath = path.join(artifactsDir, artifactPath);
+      try {
+        await fs.promises.access(fullPath);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Initialize the RAILGUN privacy engine.
- *
- * Real implementation would:
- *   1. Call `startRailgunEngine(...)` with artifact paths and database config
- *   2. Set the network (Ethereum mainnet, Sepolia, Polygon, etc.)
- *   3. Load or create the RAILGUN wallet from the mnemonic
- *
- * Example SDK flow:
- * ```ts
- * import { startRailgunEngine } from "@railgun-community/wallet";
- * import { setOnBalanceUpdateCallback } from "@railgun-community/wallet";
- *
- * await startRailgunEngine(
- *   walletSource,          // "sovereign-vpn-payout"
- *   dbEncryptionKey,       // derived from config
- *   artifactStore,         // local file system artifact store
- *   useNativeArtifacts,    // false for Node.js
- *   skipMerkletreeScans,   // false - we need full sync
- * );
- *
- * // Load network
- * const network = NETWORK_CONFIG[chainId];
- * await loadProvider(providerConfig, network.name);
- *
- * // Create or load wallet
- * const { railgunWalletInfo } = await createRailgunWallet(
- *   dbEncryptionKey,
- *   mnemonic,
- *   creationBlockNumbers,
- * );
- * ```
+ * Initialize the RAILGUN privacy engine, load the provider, and create
+ * (or load) the wallet from the configured mnemonic.
  */
 export async function initRailgunEngine(config: Config): Promise<void> {
-  console.log("[railgun/engine] Initializing RAILGUN engine (stub)...");
+  console.log("[railgun/engine] Initializing RAILGUN engine...");
   console.log(`[railgun/engine] Chain ID: ${config.chainId}`);
 
   if (!config.railgunMnemonic) {
@@ -75,36 +116,75 @@ export async function initRailgunEngine(config: Config): Promise<void> {
     return;
   }
 
-  // TODO: Replace with actual SDK initialization
-  //
-  // Steps:
-  //   1. Download/verify proving key artifacts
-  //   2. startRailgunEngine(...)
-  //   3. loadProvider(...)
-  //   4. createRailgunWallet(mnemonic)
-  //   5. Wait for initial balance scan
+  try {
+    networkName = chainIdToNetworkName(config.chainId);
+    const network = NETWORK_CONFIG[networkName];
 
-  state.initialized = true;
-  state.networkName = config.chainId === 1 ? "ethereum" : `chain-${config.chainId}`;
+    // 1. Create LevelDB database
+    await fs.promises.mkdir(config.railgunDbPath, { recursive: true });
+    const db = LevelDOWN(config.railgunDbPath);
 
-  console.log("[railgun/engine] Engine initialized (stub) on", state.networkName);
+    // 2. Create artifact store
+    await fs.promises.mkdir(config.railgunArtifactsPath, { recursive: true });
+    const artifactStore = createArtifactStore(config.railgunArtifactsPath);
+
+    // 3. Start the RAILGUN engine
+    await startRailgunEngine(
+      "svpn-payout",       // walletSource (max 16 chars lowercase)
+      db,
+      false,               // shouldDebug
+      artifactStore,
+      false,               // useNativeArtifacts (false for Node.js)
+      false,               // skipMerkletreeScans
+      config.railgunPoiNodes.length > 0 ? config.railgunPoiNodes : undefined,
+    );
+
+    console.log("[railgun/engine] Engine started");
+
+    // 4. Load provider
+    const providerConfig = {
+      chainId: config.chainId,
+      providers: [
+        {
+          provider: config.ethRpcUrl,
+          priority: 1,
+          weight: 2,
+        },
+      ],
+    };
+
+    await loadProvider(providerConfig, networkName);
+    console.log(`[railgun/engine] Provider loaded for ${networkName}`);
+
+    // 5. Derive encryption key from mnemonic
+    encryptionKey = deriveEncryptionKey(config.railgunMnemonic);
+
+    // 6. Create or load wallet
+    const creationBlockMap: Record<string, number> = {};
+    creationBlockMap[networkName] = network.deploymentBlock ?? 0;
+
+    const walletInfo = await createRailgunWallet(
+      encryptionKey,
+      config.railgunMnemonic,
+      creationBlockMap,
+    );
+
+    state.walletId = walletInfo.id;
+    state.railgunAddress = walletInfo.railgunAddress;
+    state.networkName = networkName;
+    state.initialized = true;
+
+    console.log(`[railgun/engine] Wallet created: ${state.railgunAddress}`);
+    console.log("[railgun/engine] Engine initialized successfully");
+  } catch (err) {
+    console.error("[railgun/engine] Failed to initialize RAILGUN engine:", err);
+    state.initialized = false;
+  }
 }
 
 /**
  * Sync the UTXO Merkle tree to the latest block.
- *
- * Real implementation would:
- *   1. Call the SDK's scan/sync utilities
- *   2. Wait for the Merkle tree to reach the latest on-chain commitment
- *   3. This is required before shielding or transferring
- *
- * Example SDK flow:
- * ```ts
- * import { refreshBalances } from "@railgun-community/wallet";
- *
- * const { chain } = NETWORK_CONFIG[chainId];
- * await refreshBalances(chain, undefined);
- * ```
+ * Required before shielding or transferring.
  */
 export async function syncMerkleTree(): Promise<void> {
   if (!state.initialized) {
@@ -112,13 +192,16 @@ export async function syncMerkleTree(): Promise<void> {
     return;
   }
 
-  console.log("[railgun/engine] Syncing UTXO Merkle tree (stub)...");
+  console.log("[railgun/engine] Syncing UTXO Merkle tree...");
 
-  // TODO: Replace with actual SDK merkle tree sync
-  // This can take several minutes on first run.
-
-  state.merkleTreeSynced = true;
-  console.log("[railgun/engine] Merkle tree synced (stub)");
+  try {
+    const { chain } = NETWORK_CONFIG[networkName];
+    await refreshBalances(chain, [state.walletId]);
+    state.merkleTreeSynced = true;
+    console.log("[railgun/engine] Merkle tree synced");
+  } catch (err) {
+    console.error("[railgun/engine] Merkle tree sync failed:", err);
+  }
 }
 
 /**
@@ -126,4 +209,25 @@ export async function syncMerkleTree(): Promise<void> {
  */
 export function getEngineState(): Readonly<RailgunEngineState> {
   return { ...state };
+}
+
+/**
+ * Get the RAILGUN wallet ID for shield/transfer operations.
+ */
+export function getWalletId(): string {
+  return state.walletId;
+}
+
+/**
+ * Get the encryption key for shield/transfer operations.
+ */
+export function getEncryptionKey(): string {
+  return encryptionKey;
+}
+
+/**
+ * Quick check whether the RAILGUN engine is ready for operations.
+ */
+export function isRailgunReady(): boolean {
+  return state.initialized && state.walletId !== "";
 }
