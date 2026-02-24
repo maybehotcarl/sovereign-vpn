@@ -4,6 +4,10 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+interface IPayoutVault {
+    function creditOperator(address operator) external payable;
+}
+
 /// @title SessionManager
 /// @notice On-chain VPN session tracking and payment routing.
 ///         Users pay per-session (paid tier), and payments are split between
@@ -63,6 +67,10 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
 
     /// @notice Accumulated treasury balance (withdrawable).
     uint256 public treasuryBalance;
+
+    /// @notice PayoutVault address for RAILGUN private payouts. When set, operator
+    ///         earnings route to the vault instead of accumulating here.
+    address public payoutVault;
 
     // =========================================================================
     //                          EVENTS
@@ -197,7 +205,13 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
             uint256 operatorPayout = (s.payment * operatorShareBps) / 10000;
             uint256 treasuryPayout = s.payment - operatorPayout;
 
-            operatorBalance[s.node] += operatorPayout;
+            // Route operator share to PayoutVault (RAILGUN) if configured,
+            // otherwise accumulate locally for legacy withdrawal.
+            if (payoutVault != address(0)) {
+                IPayoutVault(payoutVault).creditOperator{value: operatorPayout}(s.node);
+            } else {
+                operatorBalance[s.node] += operatorPayout;
+            }
             treasuryBalance += treasuryPayout;
 
             emit SessionClosed(sessionId, s.user, operatorPayout, treasuryPayout);
@@ -287,5 +301,11 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     /// @notice Update the maximum session duration.
     function setMaxSessionDuration(uint256 newMax) external onlyOwner {
         maxSessionDuration = newMax;
+    }
+
+    /// @notice Set the PayoutVault address for RAILGUN private payouts.
+    ///         Set to address(0) to disable and revert to legacy balance accumulation.
+    function setPayoutVault(address _payoutVault) external onlyOwner {
+        payoutVault = _payoutVault;
     }
 }

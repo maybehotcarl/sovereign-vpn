@@ -28,6 +28,32 @@ services:
     networks:
       - vpn
 
+  payout-service:
+    build:
+      context: ./payout-service
+      dockerfile: Dockerfile
+    environment:
+      - ETH_RPC_URL=${ETH_RPC_URL:-}
+      - CHAIN_ID=${CHAIN_ID:-11155111}
+      - PAYOUT_VAULT_ADDRESS=${PAYOUT_VAULT_ADDRESS:-}
+      - NODE_REGISTRY_ADDRESS=${NODE_REGISTRY_ADDRESS:-}
+      - EXECUTOR_PRIVATE_KEY=${EXECUTOR_PRIVATE_KEY:-}
+      - RAILGUN_MNEMONIC=${RAILGUN_MNEMONIC:-}
+      - PAYOUT_CRON=${PAYOUT_CRON:-0 0 * * 0}
+      - MIN_PAYOUT_WEI=${MIN_PAYOUT_WEI:-10000000000000000}
+      - DRY_RUN=${DRY_RUN:-true}
+      - HEALTH_PORT=3001
+    ports:
+      - "3001:3001"
+    volumes:
+      - payout-data:/app/data
+    restart: unless-stopped
+    networks:
+      - vpn
+
+volumes:
+  payout-data:
+
 networks:
   vpn:
     driver: bridge

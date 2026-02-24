@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
 import "../src/SubscriptionManager.sol";
+import "../src/PayoutVault.sol";
 
 contract SubscriptionManagerTest is Test {
     SubscriptionManager public sm;
@@ -327,5 +328,46 @@ contract SubscriptionManagerTest is Test {
         vm.expectEmit(true, true, true, true);
         emit SubscriptionManager.Renewed(user1, nodeOp, TIER_30D, PRICE_30D, expectedExpiry);
         sm.renewSubscription{value: PRICE_30D}(TIER_30D, address(0));
+    }
+
+    // =========================================================================
+    //                          PAYOUT VAULT ROUTING
+    // =========================================================================
+
+    function test_SubscribeRoutesToVault() public {
+        // Deploy PayoutVault and wire it up
+        address executor = address(0xE0E0);
+        PayoutVault vault = new PayoutVault(executor);
+        vault.authorizeSource(address(sm));
+        sm.setPayoutVault(address(vault));
+
+        vm.prank(user1);
+        sm.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        // Operator share should be in vault, not in SM's operatorBalance
+        assertEq(sm.operatorBalance(nodeOp), 0);
+        assertEq(vault.pendingPayouts(nodeOp), (PRICE_30D * 80) / 100);
+        assertEq(sm.treasuryBalance(), (PRICE_30D * 20) / 100);
+    }
+
+    function test_SubscribeFallsBackWithoutVault() public {
+        // No vault — same as before
+        vm.prank(user1);
+        sm.subscribe{value: PRICE_30D}(nodeOp, TIER_30D);
+
+        assertEq(sm.operatorBalance(nodeOp), (PRICE_30D * 80) / 100);
+        assertEq(sm.treasuryBalance(), (PRICE_30D * 20) / 100);
+    }
+
+    function test_SetPayoutVault() public {
+        address vault = address(0xBEEF);
+        sm.setPayoutVault(vault);
+        assertEq(sm.payoutVault(), vault);
+    }
+
+    function test_SetPayoutVaultRevertsNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert();
+        sm.setPayoutVault(address(0xBEEF));
     }
 }
