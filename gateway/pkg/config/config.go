@@ -13,7 +13,7 @@ type Config struct {
 	ListenAddr string `json:"listen_addr"` // e.g. ":8080"
 
 	// Ethereum RPC endpoint for NFT ownership checks
-	EthereumRPC string `json:"ethereum_rpc"` // e.g. "https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
+	EthereumRPC string `json:"ethereum_rpc"` // e.g. "https://ethereum-rpc.publicnode.com"
 
 	// Memes contract address (ERC-1155)
 	MemesContract string `json:"memes_contract"`
@@ -36,7 +36,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		ListenAddr:         ":8080",
-		EthereumRPC:        "https://rpc.sepolia.org",
+		EthereumRPC:        "https://ethereum-rpc.publicnode.com",
 		MemesContract:      "",
 		AccessPolicyContract: "",
 		SIWEDomain:         "6529vpn.io",

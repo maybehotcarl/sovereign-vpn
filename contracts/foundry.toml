@@ -7,3 +7,7 @@ solc = "0.8.24"
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
 ]
+
+[rpc_endpoints]
+mainnet = "https://ethereum-rpc.publicnode.com"
+sepolia = "https://ethereum-sepolia-rpc.publicnode.com"

@@ -34,7 +34,7 @@ func main() {
 	ethWS := flag.String("eth-ws", "", "Ethereum WebSocket endpoint for event monitoring")
 	policyContract := flag.String("policy-contract", "", "AccessPolicy contract address")
 	memesContract := flag.String("memes-contract", "", "Memes ERC-1155 contract address")
-	chainID := flag.Int("chain-id", 11155111, "Ethereum chain ID (1=mainnet, 11155111=sepolia)")
+	chainID := flag.Int("chain-id", 1, "Ethereum chain ID (1=mainnet, 11155111=sepolia)")
 	siweDomain := flag.String("siwe-domain", "", "SIWE domain (default: 6529vpn.io)")
 
 	// Direct mode (mainnet) — check Memes ERC-1155 directly without AccessPolicy
