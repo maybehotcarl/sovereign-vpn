@@ -130,7 +130,7 @@ export async function initRailgunEngine(config: Config): Promise<void> {
 
     // 3. Start the RAILGUN engine
     await startRailgunEngine(
-      "svpn-payout",       // walletSource (max 16 chars lowercase)
+      "svpnpayout",        // walletSource (max 16 chars lowercase alphanumeric)
       db,
       false,               // shouldDebug
       artifactStore,

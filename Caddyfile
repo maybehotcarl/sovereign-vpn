@@ -1,5 +1,5 @@
-:3000 {
-	# API routes — reverse proxy to gateway container (matched first)
+6529vpn.io {
+	# API routes — reverse proxy to gateway container
 	handle /auth/* {
 		reverse_proxy localhost:8080
 	}
@@ -16,6 +16,9 @@
 		reverse_proxy localhost:8080
 	}
 	handle /health {
+		reverse_proxy localhost:8080
+	}
+	handle /payout/* {
 		reverse_proxy localhost:8080
 	}
 
