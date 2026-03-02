@@ -174,6 +174,10 @@ func (c *Client) Health() (map[string]any, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, c.parseError(resp)
+	}
+
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding health response: %w", err)
@@ -193,6 +197,7 @@ type NodeInfo struct {
 	Endpoint     string `json:"endpoint"`
 	WgPubKey     string `json:"wg_pub_key"`
 	Region       string `json:"region"`
+	Rep          int    `json:"rep"`
 	CardEligible bool   `json:"card_eligible"`
 	Active       bool   `json:"active"`
 }

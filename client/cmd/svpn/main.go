@@ -244,20 +244,33 @@ func gatewayURLFromEndpoint(endpoint string) (string, error) {
 	if endpoint == "" {
 		return "", fmt.Errorf("empty endpoint")
 	}
+
+	// If the endpoint already contains a scheme, parse it as a URL and
+	// respect the provided scheme (e.g. http:// for local/non-TLS use).
+	if strings.Contains(endpoint, "://") {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return "", fmt.Errorf("invalid endpoint URL %q: %w", endpoint, err)
+		}
+		if u.Host == "" {
+			return "", fmt.Errorf("missing host in endpoint %q", endpoint)
+		}
+		return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String(), nil
+	}
+
+	// Otherwise treat as host or host:port (e.g. WireGuard endpoint).
 	host := endpoint
 	if h, _, err := net.SplitHostPort(endpoint); err == nil {
 		host = h
-	} else if h, _, err := net.SplitHostPort(endpoint + ":51820"); err == nil {
-		host = h
 	}
 	if host == "" {
-		return "", fmt.Errorf("missing host")
+		return "", fmt.Errorf("missing host in endpoint %q", endpoint)
 	}
+	// Bracket bare IPv6 addresses for use in a URL.
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		host = "[" + host + "]"
 	}
-	u := &url.URL{Scheme: "https", Host: host}
-	return u.String(), nil
+	return (&url.URL{Scheme: "https", Host: host}).String(), nil
 }
 
 func cmdKeygen(args []string) {
