@@ -32,3 +32,9 @@ func (r *Revoker) InvalidateAndRevoke(wallet common.Address) {
 
 	log.Printf("[revoker] Invalidated cache and revoked session for %s", wallet.Hex())
 }
+
+// InvalidateOnly invalidates the NFT check cache without revoking the session.
+func (r *Revoker) InvalidateOnly(wallet common.Address) {
+	r.srv.checker.Invalidate(wallet)
+	log.Printf("[revoker] Invalidated cache for %s", wallet.Hex())
+}

@@ -58,6 +58,12 @@ export class ReceiptStore {
       CREATE INDEX IF NOT EXISTS idx_payout_receipts_created_at
         ON payout_receipts (created_at DESC)
     `);
+
+    // Speed up idempotent upsert lookups by operator+tx_hash.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_payout_receipts_operator_tx_hash
+        ON payout_receipts (operator, tx_hash)
+    `);
   }
 
   /**
@@ -76,12 +82,28 @@ export class ReceiptStore {
     railgunTxId: string | null = null,
     status: string = "completed",
   ): void {
-    const stmt = this.db.prepare(`
+    const updateStmt = this.db.prepare(`
+      UPDATE payout_receipts
+      SET
+        amount = ?,
+        railgun_tx_id = COALESCE(?, railgun_tx_id),
+        status = ?
+      WHERE operator = ? AND tx_hash = ?
+    `);
+
+    const insertStmt = this.db.prepare(`
       INSERT INTO payout_receipts (operator, amount, tx_hash, railgun_tx_id, status)
       VALUES (?, ?, ?, ?, ?)
     `);
 
-    stmt.run(operator, amount, txHash, railgunTxId, status);
+    const tx = this.db.transaction(() => {
+      const result = updateStmt.run(amount, railgunTxId, status, operator, txHash);
+      if (result.changes === 0) {
+        insertStmt.run(operator, amount, txHash, railgunTxId, status);
+      }
+    });
+
+    tx();
   }
 
   /**
@@ -120,19 +142,30 @@ export class ReceiptStore {
    * Get aggregate statistics for the receipt store.
    */
   getStats(): { totalPayouts: number; totalAmountWei: string; uniqueOperators: number } {
-    const row = this.db.prepare(`
+    const rows = this.db.prepare(`
       SELECT
-        COUNT(*) as totalPayouts,
-        COALESCE(SUM(CAST(amount AS INTEGER)), 0) as totalAmountWei,
-        COUNT(DISTINCT operator) as uniqueOperators
-      FROM payout_receipts
-      WHERE status = 'completed'
-    `).get() as { totalPayouts: number; totalAmountWei: number; uniqueOperators: number };
+        pr.operator as operator,
+        pr.amount as amount
+      FROM payout_receipts pr
+      INNER JOIN (
+        SELECT operator, tx_hash, MAX(id) AS keep_id
+        FROM payout_receipts
+        WHERE status = 'completed'
+        GROUP BY operator, tx_hash
+      ) dedup ON pr.id = dedup.keep_id
+    `).all() as Array<{ operator: string; amount: string }>;
+
+    let totalAmountWei = 0n;
+    const operators = new Set<string>();
+    for (const row of rows) {
+      totalAmountWei += BigInt(row.amount);
+      operators.add(row.operator);
+    }
 
     return {
-      totalPayouts: row.totalPayouts,
-      totalAmountWei: String(row.totalAmountWei),
-      uniqueOperators: row.uniqueOperators,
+      totalPayouts: rows.length,
+      totalAmountWei: totalAmountWei.toString(),
+      uniqueOperators: operators.size,
     };
   }
 

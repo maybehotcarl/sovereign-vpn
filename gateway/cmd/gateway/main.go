@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
@@ -284,6 +285,18 @@ func main() {
 				log.Fatalf("Failed to create session manager: %v", err)
 			}
 			defer sm.Close()
+
+			// If the signer key differs from the heartbeat key, the signer is the
+			// contract owner, not this node. Set the real operator from heartbeat key.
+			if *heartbeatKey != "" && *sessionKey != "" && *heartbeatKey != *sessionKey {
+				opKey, err := crypto.HexToECDSA(*heartbeatKey)
+				if err != nil {
+					log.Fatalf("Failed to parse heartbeat key for node operator: %v", err)
+				}
+				sm.SetNodeOperator(crypto.PubkeyToAddress(opKey.PublicKey))
+				log.Printf("SessionManager node operator set from heartbeat key")
+			}
+
 			srv.SetSessionManager(sm)
 			log.Printf("SessionManager enabled: %s", *sessionManagerContract)
 		}

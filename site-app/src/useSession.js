@@ -2,26 +2,29 @@ import { useState, useCallback } from 'react';
 
 const STORAGE_KEY = 'svpn_session';
 
-function loadSession() {
+function clearPersistedSession() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    localStorage.removeItem(STORAGE_KEY);
   } catch {
-    return null;
+    // no-op
   }
 }
 
 export function useSession() {
-  const [session, setSession] = useState(loadSession);
+  // Keep VPN session data in memory only.
+  // Legacy persisted session blobs are purged immediately for safety.
+  const [session, setSession] = useState(() => {
+    clearPersistedSession();
+    return null;
+  });
 
   const saveSession = useCallback((data) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    clearPersistedSession();
     setSession(data);
   }, []);
 
   const clearSession = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    clearPersistedSession();
     setSession(null);
   }, []);
 

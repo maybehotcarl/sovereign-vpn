@@ -23,7 +23,8 @@ type Manager struct {
 	contractAddr common.Address
 	abi          abi.ABI
 	key          *ecdsa.PrivateKey // nil = read-only (no writes)
-	operatorAddr common.Address    // derived from key — the "node" param
+	signerAddr   common.Address    // derived from key — tx sender
+	nodeAddr     common.Address    // the actual node operator for session attribution
 	chainID      *big.Int
 	mu           sync.Mutex // protects nonce management
 }
@@ -144,10 +145,26 @@ func New(rpcURL, contractAddr, privateKeyHex string, chainID int64) (*Manager, e
 			return nil, fmt.Errorf("parsing private key: %w", err)
 		}
 		m.key = key
-		m.operatorAddr = crypto.PubkeyToAddress(key.PublicKey)
+		m.signerAddr = crypto.PubkeyToAddress(key.PublicKey)
 	}
 
 	return m, nil
+}
+
+// SetNodeOperator sets the node operator address used for session attribution.
+// This must be called before OpenFreeSession or GetSessionInfo if the tx signer
+// is not the node operator (e.g. signer is the contract owner, not the node).
+func (m *Manager) SetNodeOperator(addr common.Address) {
+	m.nodeAddr = addr
+}
+
+// nodeOperator returns the node address for session attribution.
+// Falls back to the signer address if no explicit node operator was set.
+func (m *Manager) nodeOperator() common.Address {
+	if m.nodeAddr != (common.Address{}) {
+		return m.nodeAddr
+	}
+	return m.signerAddr
 }
 
 // OpenFreeSession sends an openFreeSession tx in a background goroutine (fire-and-forget).
@@ -158,7 +175,7 @@ func (m *Manager) OpenFreeSession(user common.Address, durationSecs uint64) {
 	}
 
 	go func() {
-		callData, err := m.abi.Pack("openFreeSession", user, m.operatorAddr, new(big.Int).SetUint64(durationSecs))
+		callData, err := m.abi.Pack("openFreeSession", user, m.nodeOperator(), new(big.Int).SetUint64(durationSecs))
 		if err != nil {
 			log.Printf("[sessionmgr] Error packing openFreeSession: %v", err)
 			return
@@ -273,7 +290,7 @@ func (m *Manager) GetSessionInfo(ctx context.Context) (*SessionInfo, error) {
 	return &SessionInfo{
 		Contract:     m.contractAddr.Hex(),
 		ChainID:      m.chainID.Int64(),
-		NodeOperator: m.operatorAddr.Hex(),
+		NodeOperator: m.nodeOperator().Hex(),
 		PricePerHour: pricePerHour.String(),
 		Duration:     duration,
 		CostWei:      cost.String(),

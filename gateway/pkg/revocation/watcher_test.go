@@ -7,13 +7,19 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// mockRevoker records calls to InvalidateAndRevoke.
+// mockRevoker records calls to invalidation/revocation hooks.
 type mockRevoker struct {
-	revoked []common.Address
+	revoked     []common.Address
+	invalidated []common.Address
 }
 
 func (m *mockRevoker) InvalidateAndRevoke(wallet common.Address) {
+	m.invalidated = append(m.invalidated, wallet)
 	m.revoked = append(m.revoked, wallet)
+}
+
+func (m *mockRevoker) InvalidateOnly(wallet common.Address) {
+	m.invalidated = append(m.invalidated, wallet)
 }
 
 func TestHandleLogTransferSingle(t *testing.T) {
@@ -45,15 +51,21 @@ func TestHandleLogTransferSingle(t *testing.T) {
 
 	w.handleLog(vLog)
 
-	// Should revoke both from and to
-	if len(revoker.revoked) != 2 {
-		t.Fatalf("expected 2 revocations, got %d", len(revoker.revoked))
+	// Sender should be revoked; receiver should only be invalidated.
+	if len(revoker.revoked) != 1 {
+		t.Fatalf("expected 1 revocation, got %d", len(revoker.revoked))
 	}
 	if revoker.revoked[0] != from {
 		t.Errorf("expected from=%s, got %s", from.Hex(), revoker.revoked[0].Hex())
 	}
-	if revoker.revoked[1] != to {
-		t.Errorf("expected to=%s, got %s", to.Hex(), revoker.revoked[1].Hex())
+	if len(revoker.invalidated) != 2 {
+		t.Fatalf("expected 2 invalidations, got %d", len(revoker.invalidated))
+	}
+	if revoker.invalidated[0] != from {
+		t.Errorf("expected invalidated from=%s, got %s", from.Hex(), revoker.invalidated[0].Hex())
+	}
+	if revoker.invalidated[1] != to {
+		t.Errorf("expected invalidated to=%s, got %s", to.Hex(), revoker.invalidated[1].Hex())
 	}
 }
 
@@ -76,12 +88,15 @@ func TestHandleLogSkipsMint(t *testing.T) {
 
 	w.handleLog(vLog)
 
-	// Only the receiver should be invalidated (from is zero, skipped)
-	if len(revoker.revoked) != 1 {
-		t.Fatalf("expected 1 revocation (receiver only), got %d", len(revoker.revoked))
+	// Only receiver cache should be invalidated (no sender revoke on mint).
+	if len(revoker.revoked) != 0 {
+		t.Fatalf("expected 0 revocations, got %d", len(revoker.revoked))
 	}
-	if revoker.revoked[0] != to {
-		t.Errorf("expected to=%s, got %s", to.Hex(), revoker.revoked[0].Hex())
+	if len(revoker.invalidated) != 1 {
+		t.Fatalf("expected 1 invalidation, got %d", len(revoker.invalidated))
+	}
+	if revoker.invalidated[0] != to {
+		t.Errorf("expected invalidated to=%s, got %s", to.Hex(), revoker.invalidated[0].Hex())
 	}
 }
 
@@ -104,8 +119,14 @@ func TestHandleLogTransferBatch(t *testing.T) {
 
 	w.handleLog(vLog)
 
-	if len(revoker.revoked) != 2 {
-		t.Fatalf("expected 2 revocations, got %d", len(revoker.revoked))
+	if len(revoker.revoked) != 1 {
+		t.Fatalf("expected 1 revocation, got %d", len(revoker.revoked))
+	}
+	if revoker.revoked[0] != from {
+		t.Errorf("expected revoked from=%s, got %s", from.Hex(), revoker.revoked[0].Hex())
+	}
+	if len(revoker.invalidated) != 2 {
+		t.Fatalf("expected 2 invalidations, got %d", len(revoker.invalidated))
 	}
 }
 
@@ -121,6 +142,9 @@ func TestHandleLogTooFewTopics(t *testing.T) {
 
 	if len(revoker.revoked) != 0 {
 		t.Errorf("should not revoke with too few topics, got %d", len(revoker.revoked))
+	}
+	if len(revoker.invalidated) != 0 {
+		t.Errorf("should not invalidate with too few topics, got %d", len(revoker.invalidated))
 	}
 }
 

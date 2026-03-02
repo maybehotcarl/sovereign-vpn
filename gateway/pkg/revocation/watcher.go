@@ -34,6 +34,8 @@ var (
 type SessionRevoker interface {
 	// InvalidateAndRevoke invalidates cache and revokes session for a wallet.
 	InvalidateAndRevoke(wallet common.Address)
+	// InvalidateOnly invalidates cache without revoking session.
+	InvalidateOnly(wallet common.Address)
 }
 
 // Watcher monitors ERC-1155 transfer events for real-time session revocation.
@@ -186,7 +188,7 @@ func (w *Watcher) handleLog(vLog types.Log) {
 	// Also invalidate cache for the receiver (they now have new NFTs,
 	// might upgrade tier)
 	if to != zeroAddr {
-		w.revoker.InvalidateAndRevoke(to)
+		w.revoker.InvalidateOnly(to)
 	}
 }
 

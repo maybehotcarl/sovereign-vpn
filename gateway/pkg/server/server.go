@@ -15,6 +15,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/ratelimit"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/payoutvault"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
@@ -42,11 +43,17 @@ type Server struct {
 	peerOwners  map[string]common.Address
 	mux         *http.ServeMux
 	corsOrigin  string
+	limiter     *ratelimit.Limiter
 }
 
 // New creates a new gateway server.
 func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manager) *Server {
 	gate := nftgate.NewGate(checker, cfg.CredentialTTL)
+
+	var limiter *ratelimit.Limiter
+	if cfg.RateLimitPerMinute > 0 {
+		limiter = ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+	}
 
 	s := &Server{
 		cfg:     cfg,
@@ -56,6 +63,7 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 		wg:      wg,
 		peerOwners: make(map[string]common.Address),
 		mux:     http.NewServeMux(),
+		limiter: limiter,
 	}
 
 	// Public endpoints (no session required)
@@ -129,12 +137,16 @@ func (s *Server) SetThisCardID(id int64) {
 	s.thisCardID = id
 }
 
-// Handler returns the HTTP handler.
+// Handler returns the HTTP handler with rate limiting and CORS applied.
 func (s *Server) Handler() http.Handler {
-	if s.corsOrigin == "" {
-		return s.mux
+	var h http.Handler = s.mux
+	if s.corsOrigin != "" {
+		h = s.corsMiddleware(h)
 	}
-	return s.corsMiddleware(s.mux)
+	if s.limiter != nil {
+		h = s.limiter.Wrap(h)
+	}
+	return h
 }
 
 // corsMiddleware wraps a handler with CORS headers for the configured origin.

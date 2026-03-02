@@ -148,7 +148,10 @@ export class PayoutProcessor {
 
       // --- Step 2: Process batch payout on-chain (vault → executor) ---
       const batches = batchOperators(eligible, MAX_BATCH_SIZE);
-      const successfulOperators: EligibleOperator[] = [];
+      const successfulPayouts: Array<{
+        operator: EligibleOperator;
+        vaultTxHash: string;
+      }> = [];
       console.log(
         `[processor] Split into ${batches.length} batch(es) of max ${MAX_BATCH_SIZE}`,
       );
@@ -176,7 +179,7 @@ export class PayoutProcessor {
           // Record receipts for each operator in this batch
           for (const op of batch) {
             this.recordReceipt(op, txHash);
-            successfulOperators.push(op);
+            successfulPayouts.push({ operator: op, vaultTxHash: txHash });
             result.totalAmount += op.pendingAmount;
             result.successCount++;
           }
@@ -215,7 +218,8 @@ export class PayoutProcessor {
           let transferSuccessCount = 0;
           let transferFailureCount = 0;
 
-          for (const op of successfulOperators) {
+          for (const payout of successfulPayouts) {
+            const { operator: op, vaultTxHash } = payout;
             if (!op.railgunAddress) continue;
 
             console.log(
@@ -232,8 +236,12 @@ export class PayoutProcessor {
 
             if (transferResult.success) {
               transferSuccessCount++;
-              // Update receipt with RAILGUN tx ID
-              this.recordReceipt(op, transferResult.txHash ?? "", transferResult.railgunTxId);
+              // Update the existing vault receipt with private transfer metadata.
+              this.recordReceipt(
+                op,
+                vaultTxHash,
+                transferResult.railgunTxId ?? transferResult.txHash,
+              );
               console.log(
                 `[processor] Transfer to ${op.address} confirmed: ${transferResult.txHash}`,
               );

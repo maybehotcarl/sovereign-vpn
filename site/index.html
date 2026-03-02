@@ -596,6 +596,9 @@ async function startConnect() {
     if (!verifyResp.ok) {
       throw new Error(verifyData.error || 'Verification failed');
     }
+    if (!verifyData.session_token) {
+      throw new Error('Gateway did not return a session token');
+    }
     setStepDone('step-verify', `Verified: ${verifyData.tier} tier`);
 
     // Step 5: Generate WireGuard keys and connect
@@ -606,7 +609,7 @@ async function startConnect() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_token: verifyData.address,
+        session_token: verifyData.session_token,
         public_key: generatedKeys.publicKey
       })
     });
