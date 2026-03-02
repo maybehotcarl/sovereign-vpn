@@ -42,13 +42,14 @@ func TestNewChallenge(t *testing.T) {
 
 func TestFormatMessage(t *testing.T) {
 	challenge := &Challenge{
-		Domain:    "test.example.com",
-		URI:       "https://test.example.com",
-		Version:   "1",
-		ChainID:   1,
-		Nonce:     "abc123",
-		IssuedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Statement: "Sign in to Sovereign VPN with your Ethereum account.",
+		Domain:         "test.example.com",
+		URI:            "https://test.example.com",
+		Version:        "1",
+		ChainID:        1,
+		Nonce:          "abc123",
+		IssuedAt:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ExpirationTime: time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC),
+		Statement:      "Sign in to Sovereign VPN with your Ethereum account.",
 	}
 
 	msg := FormatMessage(challenge, "0x1234567890abcdef1234567890abcdef12345678")
@@ -66,6 +67,7 @@ func TestFormatMessage(t *testing.T) {
 		"Chain ID: 1",
 		"Nonce: abc123",
 		"Issued At: 2026-01-01T00:00:00Z",
+		"Expiration Time: 2026-01-01T00:05:00Z",
 		"Sign in to Sovereign VPN",
 	}
 	for _, exp := range expected {

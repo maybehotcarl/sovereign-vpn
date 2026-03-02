@@ -2,6 +2,7 @@ package siwe
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,14 +13,15 @@ import (
 
 // Challenge represents a SIWE challenge issued to a client.
 type Challenge struct {
-	Domain    string    `json:"domain"`
-	Address   string    `json:"address,omitempty"` // Empty in challenge, filled by client
-	URI       string    `json:"uri"`
-	Version   string    `json:"version"`
-	ChainID   int       `json:"chain_id"`
-	Nonce     string    `json:"nonce"`
-	IssuedAt  time.Time `json:"issued_at"`
-	Statement string    `json:"statement,omitempty"`
+	Domain         string    `json:"domain"`
+	Address        string    `json:"address,omitempty"` // Empty in challenge, filled by client
+	URI            string    `json:"uri"`
+	Version        string    `json:"version"`
+	ChainID        int       `json:"chain_id"`
+	Nonce          string    `json:"nonce"`
+	IssuedAt       time.Time `json:"issued_at"`
+	ExpirationTime time.Time `json:"expiration_time"`
+	Statement      string    `json:"statement,omitempty"`
 }
 
 // SignedMessage represents a client's signed SIWE response.
@@ -35,10 +37,11 @@ type VerifiedAuth struct {
 
 // Service handles SIWE challenge generation and verification.
 type Service struct {
-	domain     string
-	uri        string
-	nonceStore *NonceStore
-	chainID    int
+	domain       string
+	uri          string
+	nonceStore   *NonceStore
+	chainID      int
+	challengeTTL time.Duration
 }
 
 // NewService creates a SIWE service.
@@ -48,6 +51,7 @@ func NewService(domain, uri string, challengeTTL time.Duration, nonceLength int)
 		uri:        uri,
 		nonceStore: NewNonceStore(challengeTTL),
 		chainID:    1, // Ethereum mainnet; Sepolia = 11155111
+		challengeTTL: challengeTTL,
 	}
 }
 
@@ -63,14 +67,16 @@ func (s *Service) NewChallenge(nonceLength int) (*Challenge, error) {
 		return nil, fmt.Errorf("generating nonce: %w", err)
 	}
 
+	issuedAt := time.Now().UTC()
 	return &Challenge{
-		Domain:    s.domain,
-		URI:       s.uri,
-		Version:   "1",
-		ChainID:   s.chainID,
-		Nonce:     nonce,
-		IssuedAt:  time.Now().UTC(),
-		Statement: "Sign in to Sovereign VPN with your Ethereum account.",
+		Domain:         s.domain,
+		URI:            s.uri,
+		Version:        "1",
+		ChainID:        s.chainID,
+		Nonce:          nonce,
+		IssuedAt:       issuedAt,
+		ExpirationTime: issuedAt.Add(s.challengeTTL),
+		Statement:      "Sign in to Sovereign VPN with your Ethereum account.",
 	}, nil
 }
 
@@ -100,7 +106,8 @@ func FormatMessage(c *Challenge, address string) string {
 	fmt.Fprintf(&b, "Version: %s\n", c.Version)
 	fmt.Fprintf(&b, "Chain ID: %d\n", c.ChainID)
 	fmt.Fprintf(&b, "Nonce: %s\n", c.Nonce)
-	fmt.Fprintf(&b, "Issued At: %s", c.IssuedAt.Format(time.RFC3339))
+	fmt.Fprintf(&b, "Issued At: %s\n", c.IssuedAt.Format(time.RFC3339))
+	fmt.Fprintf(&b, "Expiration Time: %s", c.ExpirationTime.Format(time.RFC3339))
 	return b.String()
 }
 
@@ -154,6 +161,26 @@ func (s *Service) Verify(signed *SignedMessage) (*VerifiedAuth, error) {
 	if parsed.domain != s.domain {
 		return nil, fmt.Errorf("domain mismatch: got %q, expected %q", parsed.domain, s.domain)
 	}
+	if parsed.uri != s.uri {
+		return nil, fmt.Errorf("uri mismatch: got %q, expected %q", parsed.uri, s.uri)
+	}
+	if parsed.chainID != s.chainID {
+		return nil, fmt.Errorf("chain ID mismatch: got %d, expected %d", parsed.chainID, s.chainID)
+	}
+	if parsed.issuedAt.IsZero() {
+		return nil, fmt.Errorf("issued-at is required")
+	}
+	if parsed.expirationTime.IsZero() {
+		return nil, fmt.Errorf("expiration time is required")
+	}
+
+	now := time.Now().UTC()
+	if parsed.issuedAt.After(now.Add(5 * time.Minute)) {
+		return nil, fmt.Errorf("issued-at is in the future")
+	}
+	if now.After(parsed.expirationTime) {
+		return nil, fmt.Errorf("siwe message has expired")
+	}
 
 	// Consume nonce (single-use)
 	if !s.nonceStore.Consume(parsed.nonce) {
@@ -173,9 +200,13 @@ func signHash(data []byte) []byte {
 
 // parsedMessage holds fields extracted from a SIWE message string.
 type parsedMessage struct {
-	domain  string
-	address string
-	nonce   string
+	domain         string
+	address        string
+	uri            string
+	nonce          string
+	chainID        int
+	issuedAt       time.Time
+	expirationTime time.Time
 }
 
 // parseMessage extracts key fields from an EIP-4361 message string.
@@ -203,13 +234,46 @@ func parseMessage(msg string) (*parsedMessage, error) {
 
 	// Find nonce line
 	for _, line := range lines {
-		if strings.HasPrefix(line, "Nonce: ") {
+		switch {
+		case strings.HasPrefix(line, "URI: "):
+			parsed.uri = strings.TrimPrefix(line, "URI: ")
+		case strings.HasPrefix(line, "Chain ID: "):
+			chainID, err := strconv.Atoi(strings.TrimPrefix(line, "Chain ID: "))
+			if err != nil {
+				return nil, fmt.Errorf("invalid chain ID")
+			}
+			parsed.chainID = chainID
+		case strings.HasPrefix(line, "Nonce: "):
 			parsed.nonce = strings.TrimPrefix(line, "Nonce: ")
-			break
+		case strings.HasPrefix(line, "Issued At: "):
+			issuedAt, err := time.Parse(time.RFC3339, strings.TrimPrefix(line, "Issued At: "))
+			if err != nil {
+				return nil, fmt.Errorf("invalid issued-at timestamp")
+			}
+			parsed.issuedAt = issuedAt
+		case strings.HasPrefix(line, "Expiration Time: "):
+			exp, err := time.Parse(time.RFC3339, strings.TrimPrefix(line, "Expiration Time: "))
+			if err != nil {
+				return nil, fmt.Errorf("invalid expiration timestamp")
+			}
+			parsed.expirationTime = exp
 		}
+	}
+
+	if parsed.uri == "" {
+		return nil, fmt.Errorf("uri not found in message")
+	}
+	if parsed.chainID == 0 {
+		return nil, fmt.Errorf("chain ID not found in message")
 	}
 	if parsed.nonce == "" {
 		return nil, fmt.Errorf("nonce not found in message")
+	}
+	if parsed.issuedAt.IsZero() {
+		return nil, fmt.Errorf("issued-at not found in message")
+	}
+	if parsed.expirationTime.IsZero() {
+		return nil, fmt.Errorf("expiration time not found in message")
 	}
 
 	return parsed, nil

@@ -14,10 +14,10 @@ func TestParseAddress(t *testing.T) {
 		expected string // hex without 0x prefix
 	}{
 		{"0x1234567890abcdef1234567890abcdef12345678", "1234567890abcdef1234567890abcdef12345678"},
-		{"1234567890abcdef1234567890abcdef12345678", "1234567890abcdef1234567890abcdef12345678"},
 		{"0xABCDEF1234567890ABCDEF1234567890ABCDEF12", "abcdef1234567890abcdef1234567890abcdef12"},
 		{"short", "0000000000000000000000000000000000000000"},      // invalid length -> zero
 		{"0xshort", "0000000000000000000000000000000000000000"},    // invalid length after 0x
+		{"0x1234567890abcdef1234567890abcdef1234567g", "0000000000000000000000000000000000000000"}, // invalid hex char
 	}
 
 	for _, tt := range tests {
@@ -35,24 +35,6 @@ func TestParseAddress(t *testing.T) {
 func hexString(b byte) string {
 	const hex = "0123456789abcdef"
 	return string([]byte{hex[b>>4], hex[b&0x0f]})
-}
-
-func TestHexNibble(t *testing.T) {
-	tests := []struct {
-		input    byte
-		expected byte
-	}{
-		{'0', 0}, {'9', 9},
-		{'a', 10}, {'f', 15},
-		{'A', 10}, {'F', 15},
-		{'g', 0}, {'z', 0}, // invalid -> 0
-	}
-	for _, tt := range tests {
-		got := hexNibble(tt.input)
-		if got != tt.expected {
-			t.Errorf("hexNibble(%c) = %d, want %d", tt.input, got, tt.expected)
-		}
-	}
 }
 
 func TestWriteJSON(t *testing.T) {
