@@ -53,7 +53,6 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const [copyLabel, setCopyLabel] = useState('Copy to Clipboard');
 
   // Paid tier state
-  const [paymentInfo, setPaymentInfo] = useState(null); // { node, duration, costWei, costEth }
   const [verifyData, setVerifyData] = useState(null);
   const [paymentTxHash, setPaymentTxHash] = useState(null);
 
@@ -87,7 +86,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setCurrentStep(0);
     setCompletedSteps({});
     setErrorMsg('');
-    setPaymentInfo(null);
+
     setVerifyData(null);
     setPaymentTxHash(null);
     setSelectedTier(null);
@@ -338,7 +337,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setErrorMsg('');
     setVpnConfig('');
     setTierInfo('');
-    setPaymentInfo(null);
+
     setVerifyData(null);
     setPaymentTxHash(null);
     setSelectedTier(null);
