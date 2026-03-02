@@ -328,7 +328,6 @@ func cmdNodes(args []string) {
 	for i, n := range resp.Nodes {
 		fmt.Printf("  [%d] %s\n", i+1, n.Endpoint)
 		fmt.Printf("      Region:   %s\n", n.Region)
-		fmt.Printf("      Rep:      %d (6529 VPN Operator)\n", n.Rep)
 		fmt.Printf("      Operator: %s\n", n.Operator)
 		fmt.Println()
 	}
