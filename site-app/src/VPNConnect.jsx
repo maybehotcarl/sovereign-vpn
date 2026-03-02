@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useAccount, useSignMessage, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { generateKeyPair } from './wgkeys';
+import { generateKeyPair } from './utils/wireguard';
 import { SESSION_MANAGER_ADDRESS, SESSION_MANAGER_ABI, SUBSCRIPTION_MANAGER_ABI } from './contracts';
 
 const FREE_STEPS = [
@@ -284,6 +284,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         serverEndpoint: vpnData.server_endpoint,
         clientAddress: vpnData.client_address,
         serverPublicKey: vpnData.server_public_key,
+        nodeOperator: vpnData.node_operator,
         gatewayUrl,
         vpnConfig: config,
         connectedAt: new Date().toISOString(),

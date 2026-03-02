@@ -13,6 +13,8 @@ export default defineConfig({
       '/vpn': 'http://localhost:8080',
       '/nodes': 'http://localhost:8080',
       '/session': 'http://localhost:8080',
+      '/subscription': 'http://localhost:8080',
+      '/payout': 'http://localhost:8080',
     },
   },
 })
