@@ -543,6 +543,11 @@ contract NodeRegistryTest is Test {
         assertEq(registry.operatorCardId(), OPERATOR_CARD_ID);
     }
 
+    function test_ConstructorRevertsZeroMemesContract() public {
+        vm.expectRevert(NodeRegistry.ZeroAddress.selector);
+        new NodeRegistry(MIN_STAKE, HEARTBEAT_INTERVAL, address(0), OPERATOR_CARD_ID);
+    }
+
     function test_SetOperatorCardId() public {
         uint256 newCardId = 42;
 
@@ -629,6 +634,15 @@ contract NodeRegistryTest is Test {
         vm.prank(operator1);
         vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
         registry.setRailgunAddress("");
+    }
+
+    function test_SetRailgunAddressRevertsBarePrefix() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
+        registry.setRailgunAddress("0zk");
     }
 
     function test_GetRailgunAddressUnregistered() public view {

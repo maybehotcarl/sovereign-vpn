@@ -274,6 +274,21 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       'PersistentKeepalive = 25',
     ].join('\n');
 
+    // Resolve node operator for dashboard payout panel.
+    // Paid flow already has it in tierOptions; free flow fetches /session/info.
+    let nodeOperator = tierOptions?.session?.node || '';
+    if (!nodeOperator) {
+      try {
+        const infoResp = await fetch(`${gatewayUrl}/session/info`);
+        if (infoResp.ok) {
+          const info = await infoResp.json();
+          nodeOperator = info.node_operator || '';
+        }
+      } catch {
+        // non-critical — payout panel just won't render
+      }
+    }
+
     // Save session for the dashboard
     if (onSessionCreated) {
       onSessionCreated({
@@ -285,6 +300,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         clientAddress: vpnData.client_address,
         serverPublicKey: vpnData.server_public_key,
         gatewayUrl,
+        nodeOperator,
         vpnConfig: config,
         connectedAt: new Date().toISOString(),
         publicKey: keys.publicKey,

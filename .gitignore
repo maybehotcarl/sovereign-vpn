@@ -11,6 +11,14 @@ contracts/lib/
 # Node modules
 node_modules/
 
+# Site app build and embedded external repos
+site-app/dist/
+site-app/6529-unlock/
+site-app/6529-zk-api/
+site-app/6529-zk-service/
+site-app/nftloans/
+site-app/tdh-marketplace-v2/
+
 # ZK build artifacts (regenerable via zk/scripts/build.sh)
 zk/build/
 

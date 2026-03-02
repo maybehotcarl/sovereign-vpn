@@ -222,7 +222,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
             <div className="stat">
               <div className="stat-label">Pending Payout</div>
               <div className="stat-value mono">
-                {(Number(payoutInfo.pending_payout_wei) / 1e18).toFixed(6)} ETH
+                {formatEther(BigInt(payoutInfo.pending_payout_wei))} ETH
               </div>
             </div>
           )}
