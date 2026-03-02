@@ -6,6 +6,7 @@ solc = "0.8.24"
 
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@zk/=../zk/contracts/",
 ]
 
 [rpc_endpoints]

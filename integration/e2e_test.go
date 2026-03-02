@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package integration tests the full Sovereign VPN auth + connect pipeline.
 //
 // It starts a mock Ethereum RPC, a real gateway server, and exercises the
@@ -229,18 +231,14 @@ func TestFullConnectFlow(t *testing.T) {
 	})
 
 	// Step 6: Connect to VPN
-	// Note: This will fail at the wg set command (no real interface), but
-	// we can verify the flow up to that point. In a real test environment
-	// with a WG interface, this would succeed fully.
+	// Requires a live WireGuard interface; gated behind //go:build integration.
 	t.Run("connect", func(t *testing.T) {
 		if verifyResp == nil {
 			t.Skip("skipping: verify step failed")
 		}
 		resp, err := client.Connect(verifyResp.Address, keys.PublicKey)
 		if err != nil {
-			// Expected to fail because wg command won't work in test env
-			t.Logf("Connect failed (expected in test env without WireGuard): %v", err)
-			return
+			t.Fatalf("Connect: %v", err)
 		}
 		t.Logf("Connected: IP=%s endpoint=%s tier=%s",
 			resp.ClientAddress, resp.ServerEndpoint, resp.Tier)
