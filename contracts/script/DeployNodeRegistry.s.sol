@@ -44,9 +44,9 @@ contract DeployNodeRegistry is Script {
         console.log("Treasury (owner):", deployer);
         console.log("");
         console.log("Next steps:");
-        console.log("  1. Register a test node:");
-        console.log("     cast send <NodeRegistry> 'registerNode(string,string,string)' 'vpn.example.com:51820' 'wg-pubkey-base64' 'us-east' --value 0.01ether");
-        console.log("  2. Accumulate 6,529 'VPN Operator' rep on 6529:");
-        console.log("     https://seize.io/profile/<operator>");
+        console.log("  1. Register a test node (requires operatorCardId NFT + minStake):");
+        console.log("     cast send <NodeRegistry> 'register(string,string,string)' 'vpn.example.com:51820' 'wg-pubkey-base64' 'us-east' --value 0.01ether");
+        console.log("  2. Set RAILGUN address for private payouts:");
+        console.log("     cast send <NodeRegistry> 'setRailgunAddress(string)' '0zk...'");
     }
 }

@@ -36,6 +36,14 @@ fi
 PRIV_KEY=$(cat "$WG_DIR/privatekey")
 PUB_KEY=$(cat "$WG_DIR/publickey")
 
+# ---- Detect default route interface (don't assume eth0) ----
+DEFAULT_IF="${NAT_INTERFACE:-$(ip -o route show default | awk '{print $5}' | head -1)}"
+if [ -z "$DEFAULT_IF" ]; then
+    echo "ERROR: could not detect default network interface" >&2
+    exit 1
+fi
+echo "  NAT iface:   $DEFAULT_IF"
+
 echo "=== Sovereign VPN Node ==="
 echo "  Public IP:   $PUBLIC_IP"
 echo "  WG PubKey:   $PUB_KEY"
@@ -48,8 +56,8 @@ cat > "$WG_DIR/$WG_INTERFACE.conf" <<EOF
 Address = $WG_SERVER_IP
 PrivateKey = $PRIV_KEY
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IF -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IF -j MASQUERADE
 EOF
 
 chmod 600 "$WG_DIR/$WG_INTERFACE.conf"
@@ -114,5 +122,15 @@ if [ -n "${ZK_API_URL:-}" ]; then
     fi
 fi
 
+# ---- Shutdown trap: tear down WireGuard on SIGTERM/SIGINT ----
+cleanup() {
+    echo "Shutting down..."
+    wg-quick down "$WG_INTERFACE" 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 echo "  Starting gateway..."
-exec gateway "${ARGS[@]}"
+gateway "${ARGS[@]}" &
+GATEWAY_PID=$!
+wait "$GATEWAY_PID"
