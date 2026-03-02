@@ -2,7 +2,10 @@ module github.com/maybehotcarl/sovereign-vpn/gateway
 
 go 1.24.0
 
-require github.com/ethereum/go-ethereum v1.17.0
+require (
+	github.com/ethereum/go-ethereum v1.17.0
+	golang.org/x/time v0.14.0
+)
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
