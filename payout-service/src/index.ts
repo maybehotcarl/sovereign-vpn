@@ -2,7 +2,7 @@ import cron from "node-cron";
 import type { Server } from "node:http";
 import type { ScheduledTask } from "node-cron";
 
-import { loadConfig, type Config } from "./config.js";
+import { loadConfig, verifyChainId, type Config } from "./config.js";
 import { createVaultContract } from "./vault.js";
 import { createRegistryContract } from "./registry.js";
 import { createExecutorWallet } from "./wallet.js";
@@ -120,6 +120,24 @@ async function main(): Promise<void> {
   console.log(`[main] Cron schedule:  ${config.payoutCron}`);
   console.log(`[main] Dry run:        ${config.dryRun}`);
   console.log();
+
+  // 1b. Verify provider chain ID matches configuration
+  try {
+    await verifyChainId(config);
+    console.log(`[main] Provider chain ID verified: ${config.chainId}`);
+  } catch (err) {
+    console.error("[main] Chain ID verification failed:", err);
+    process.exit(1);
+  }
+
+  // 1c. Warn if RAILGUN mnemonic is absent
+  if (!config.railgunMnemonic) {
+    console.warn(
+      "[main] WARNING: RAILGUN_MNEMONIC is not set. " +
+      "Private transfers are disabled — all payouts will remain in the executor wallet " +
+      "and be sent as regular on-chain transactions.",
+    );
+  }
 
   // 2. Initialize contracts
   const vaultContract = createVaultContract(
