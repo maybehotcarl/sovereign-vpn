@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -37,6 +38,8 @@ type Server struct {
 	zkClient    *zkverify.Client
 	payoutVault *payoutvault.Client
 	thisCardID  int64
+	peerMu      sync.RWMutex
+	peerOwners  map[string]common.Address
 	mux         *http.ServeMux
 	corsOrigin  string
 }
@@ -51,6 +54,7 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 		checker: checker,
 		gate:    gate,
 		wg:      wg,
+		peerOwners: make(map[string]common.Address),
 		mux:     http.NewServeMux(),
 	}
 
@@ -216,9 +220,10 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 
 // VerifyResponse is returned by POST /auth/verify.
 type VerifyResponse struct {
-	Address   string `json:"address"`
-	Tier      string `json:"tier"`
-	ExpiresAt string `json:"expires_at"`
+	Address      string `json:"address"`
+	SessionToken string `json:"session_token"`
+	Tier         string `json:"tier"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 // zkProofPayload is an optional ZK proof included in the verify request.
@@ -325,6 +330,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Step 4: Create a session
 	session := s.gate.CreateSession(auth.Address, result.Tier)
+	if session == nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
 
 	// Step 5: Record free session on-chain (fire-and-forget).
 	// Paid sessions are opened by the user directly via the contract.
@@ -335,9 +344,10 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Access granted: %s tier=%s", auth.Address.Hex(), result.Tier)
 
 	writeJSON(w, http.StatusOK, VerifyResponse{
-		Address:   auth.Address.Hex(),
-		Tier:      result.Tier.String(),
-		ExpiresAt: session.ExpiresAt.UTC().Format(time.RFC3339),
+		Address:      auth.Address.Hex(),
+		SessionToken: session.Token,
+		Tier:         result.Tier.String(),
+		ExpiresAt:    session.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -404,7 +414,7 @@ func (s *Server) handleSubscriptionTiers(w http.ResponseWriter, r *http.Request)
 
 // ConnectRequest is the body for POST /vpn/connect.
 type ConnectRequest struct {
-	SessionToken string `json:"session_token"` // Wallet address from /auth/verify
+	SessionToken string `json:"session_token"` // Opaque session token from /auth/verify
 	PublicKey    string `json:"public_key"`     // Client's WireGuard public key
 }
 
@@ -434,9 +444,13 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate session
-	session := s.gate.GetSession(parseAddress(req.SessionToken))
+	session := s.gate.GetSessionByToken(req.SessionToken)
 	if session == nil {
 		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate via /auth/verify")
+		return
+	}
+	if !s.claimsPeer(req.PublicKey, session.Address) {
+		writeError(w, http.StatusForbidden, "public key is already bound to another session")
 		return
 	}
 
@@ -459,6 +473,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				expiresAt := time.Now().Add(remaining)
+				s.setPeerOwner(req.PublicKey, session.Address)
 				log.Printf("VPN connected (subscription): %s -> %s (remaining=%s)", session.Address.Hex(), peerCfg.ClientAddress, remaining)
 				writeJSON(w, http.StatusOK, ConnectResponse{
 					ServerPublicKey: peerCfg.ServerPublicKey,
@@ -486,6 +501,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
+					s.setPeerOwner(req.PublicKey, session.Address)
 					log.Printf("VPN connected (paid): %s -> %s (duration=%ds)", session.Address.Hex(), peerCfg.ClientAddress, onChain.Duration)
 					writeJSON(w, http.StatusOK, ConnectResponse{
 						ServerPublicKey: peerCfg.ServerPublicKey,
@@ -514,6 +530,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("VPN connected: %s -> %s", session.Address.Hex(), peerCfg.ClientAddress)
+	s.setPeerOwner(req.PublicKey, session.Address)
 
 	writeJSON(w, http.StatusOK, ConnectResponse{
 		ServerPublicKey: peerCfg.ServerPublicKey,
@@ -534,15 +551,30 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.SessionToken == "" || req.PublicKey == "" {
+		writeError(w, http.StatusBadRequest, "session_token and public_key are required")
+		return
+	}
+
+	session := s.gate.GetSessionByToken(req.SessionToken)
+	if session == nil {
+		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate via /auth/verify")
+		return
+	}
+	if !s.peerOwnedBy(req.PublicKey, session.Address) {
+		writeError(w, http.StatusForbidden, "public key is not owned by this session")
+		return
+	}
 
 	if err := s.wg.RemovePeer(req.PublicKey); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	s.deletePeerOwner(req.PublicKey)
 
 	// Close on-chain session (fire-and-forget) — skip for subscribers
 	// (subscription stays valid; user can reconnect freely)
-	addr := common.Address(parseAddress(req.SessionToken))
+	addr := session.Address
 	isSubscriber := false
 	if s.subMgr != nil {
 		active, err := s.subMgr.HasActiveSubscription(r.Context(), addr)
@@ -566,7 +598,7 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := s.gate.GetSession(parseAddress(token))
+	session := s.gate.GetSessionByToken(token)
 	if session == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"connected": false,
@@ -752,33 +784,39 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-func parseAddress(s string) (addr [20]byte) {
-	// Simple hex address parsing
-	if len(s) >= 2 && s[:2] == "0x" {
-		s = s[2:]
+func (s *Server) claimsPeer(pubKey string, owner common.Address) bool {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if existing, ok := s.peerOwners[pubKey]; ok && existing != owner {
+		return false
 	}
-	if len(s) != 40 {
+	return true
+}
+
+func (s *Server) setPeerOwner(pubKey string, owner common.Address) {
+	s.peerMu.Lock()
+	s.peerOwners[pubKey] = owner
+	s.peerMu.Unlock()
+}
+
+func (s *Server) peerOwnedBy(pubKey string, owner common.Address) bool {
+	s.peerMu.RLock()
+	defer s.peerMu.RUnlock()
+	existing, ok := s.peerOwners[pubKey]
+	return ok && existing == owner
+}
+
+func (s *Server) deletePeerOwner(pubKey string) {
+	s.peerMu.Lock()
+	delete(s.peerOwners, pubKey)
+	s.peerMu.Unlock()
+}
+
+func parseAddress(s string) (addr [20]byte) {
+	if !common.IsHexAddress(s) {
 		return addr
 	}
-	for i := 0; i < 20; i++ {
-		addr[i] = hexByte(s[i*2], s[i*2+1])
-	}
+	parsed := common.HexToAddress(s)
+	copy(addr[:], parsed.Bytes())
 	return addr
-}
-
-func hexByte(hi, lo byte) byte {
-	return hexNibble(hi)<<4 | hexNibble(lo)
-}
-
-func hexNibble(b byte) byte {
-	switch {
-	case b >= '0' && b <= '9':
-		return b - '0'
-	case b >= 'a' && b <= 'f':
-		return b - 'a' + 10
-	case b >= 'A' && b <= 'F':
-		return b - 'A' + 10
-	default:
-		return 0
-	}
 }

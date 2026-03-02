@@ -11,9 +11,16 @@
 package nftgate
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -24,6 +31,8 @@ import (
 // Session represents an authenticated VPN session.
 type Session struct {
 	Address   common.Address
+	ID        string
+	Token     string
 	Tier      nftcheck.AccessTier
 	CreatedAt time.Time
 	ExpiresAt time.Time
@@ -31,17 +40,24 @@ type Session struct {
 
 // Gate holds the NFT verification state and session store.
 type Gate struct {
-	checker    nftcheck.AccessChecker
-	credTTL    time.Duration
-	sessions   *SessionStore
+	checker     nftcheck.AccessChecker
+	credTTL     time.Duration
+	sessions    *SessionStore
+	signingKey  [32]byte
 }
 
 // NewGate creates a new NFT gate.
 func NewGate(checker nftcheck.AccessChecker, credentialTTL time.Duration) *Gate {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		panic("failed to initialize session signing key")
+	}
+
 	return &Gate{
-		checker:  checker,
-		credTTL:  credentialTTL,
-		sessions: NewSessionStore(),
+		checker:    checker,
+		credTTL:    credentialTTL,
+		sessions:   NewSessionStore(),
+		signingKey: key,
 	}
 }
 
@@ -58,13 +74,22 @@ func (g *Gate) CheckAccess(ctx context.Context, wallet common.Address) (nftcheck
 // CreateSession creates a new authenticated session for a verified wallet.
 func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *Session {
 	now := time.Now()
+	expiresAt := now.Add(g.credTTL)
+	id, token, err := g.newSessionToken(expiresAt)
+	if err != nil {
+		log.Printf("[nftgate] Failed to issue session token for %s: %v", wallet.Hex(), err)
+		return nil
+	}
+
 	session := &Session{
 		Address:   wallet,
+		ID:        id,
+		Token:     token,
 		Tier:      tier,
 		CreatedAt: now,
-		ExpiresAt: now.Add(g.credTTL),
+		ExpiresAt: expiresAt,
 	}
-	g.sessions.Set(wallet, session)
+	g.sessions.Set(session)
 	log.Printf("[nftgate] Session created: %s tier=%s expires=%s",
 		wallet.Hex(), tier, session.ExpiresAt.Format(time.RFC3339))
 	return session
@@ -72,12 +97,31 @@ func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *S
 
 // GetSession retrieves an active session. Returns nil if expired or not found.
 func (g *Gate) GetSession(wallet common.Address) *Session {
-	session := g.sessions.Get(wallet)
+	session := g.sessions.GetByAddress(wallet)
 	if session == nil {
 		return nil
 	}
 	if time.Now().After(session.ExpiresAt) {
-		g.sessions.Delete(wallet)
+		g.sessions.DeleteByAddress(wallet)
+		return nil
+	}
+	return session
+}
+
+// GetSessionByToken retrieves an active session by signed session token.
+func (g *Gate) GetSessionByToken(token string) *Session {
+	id, expiresAt, err := g.parseAndVerifyToken(token)
+	if err != nil {
+		return nil
+	}
+
+	session := g.sessions.GetByID(id)
+	if session == nil {
+		return nil
+	}
+	now := time.Now()
+	if now.After(session.ExpiresAt) || now.After(expiresAt) {
+		g.sessions.DeleteByID(id)
 		return nil
 	}
 	return session
@@ -85,7 +129,7 @@ func (g *Gate) GetSession(wallet common.Address) *Session {
 
 // RevokeSession removes a session (used when NFT transfer is detected).
 func (g *Gate) RevokeSession(wallet common.Address) {
-	g.sessions.Delete(wallet)
+	g.sessions.DeleteByAddress(wallet)
 	log.Printf("[nftgate] Session revoked: %s", wallet.Hex())
 }
 
@@ -117,14 +161,7 @@ func (g *Gate) HTTPMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Parse the token as an Ethereum address (the session is keyed by wallet address)
-		if !common.IsHexAddress(token) {
-			http.Error(w, `{"error":"invalid session token"}`, http.StatusUnauthorized)
-			return
-		}
-
-		wallet := common.HexToAddress(token)
-		session := g.GetSession(wallet)
+		session := g.GetSessionByToken(token)
 		if session == nil {
 			http.Error(w, `{"error":"session expired or not found, re-authenticate via /auth/verify"}`, http.StatusUnauthorized)
 			return
@@ -150,3 +187,44 @@ func SessionFromContext(ctx context.Context) *Session {
 type contextKey string
 
 const sessionContextKey contextKey = "sovereign-vpn-session"
+
+func (g *Gate) newSessionToken(expiresAt time.Time) (string, string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", err
+	}
+	id := base64.RawURLEncoding.EncodeToString(raw)
+	exp := strconv.FormatInt(expiresAt.Unix(), 10)
+	payload := "v1." + id + "." + exp
+	sig := g.signPayload(payload)
+	return id, payload + "." + sig, nil
+}
+
+func (g *Gate) parseAndVerifyToken(token string) (string, time.Time, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 4 {
+		return "", time.Time{}, fmt.Errorf("invalid session token format")
+	}
+	if parts[0] != "v1" {
+		return "", time.Time{}, fmt.Errorf("unsupported session token version")
+	}
+
+	payload := strings.Join(parts[:3], ".")
+	wantSig := g.signPayload(payload)
+	if !hmac.Equal([]byte(wantSig), []byte(parts[3])) {
+		return "", time.Time{}, fmt.Errorf("invalid session token signature")
+	}
+
+	expUnix, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("invalid session token expiry")
+	}
+
+	return parts[1], time.Unix(expUnix, 0).UTC(), nil
+}
+
+func (g *Gate) signPayload(payload string) string {
+	mac := hmac.New(sha256.New, g.signingKey[:])
+	mac.Write([]byte(payload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}

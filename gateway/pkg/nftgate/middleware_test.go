@@ -161,7 +161,7 @@ func TestHTTPMiddlewareInvalidToken(t *testing.T) {
 func TestHTTPMiddlewareValidSession(t *testing.T) {
 	g := testGate()
 	addr := common.HexToAddress("0xdddddddddddddddddddddddddddddddddddddd")
-	g.CreateSession(addr, nftcheck.TierFree)
+	session := g.CreateSession(addr, nftcheck.TierFree)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session := SessionFromContext(r.Context())
@@ -178,7 +178,7 @@ func TestHTTPMiddlewareValidSession(t *testing.T) {
 	handler := g.HTTPMiddleware(inner)
 
 	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", nil)
-	req.Header.Set("X-Session-Token", addr.Hex())
+	req.Header.Set("X-Session-Token", session.Token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -190,7 +190,7 @@ func TestHTTPMiddlewareValidSession(t *testing.T) {
 func TestHTTPMiddlewareDeniedTier(t *testing.T) {
 	g := testGate()
 	addr := common.HexToAddress("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-	g.CreateSession(addr, nftcheck.TierDenied)
+	session := g.CreateSession(addr, nftcheck.TierDenied)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called for denied tier")
@@ -199,7 +199,7 @@ func TestHTTPMiddlewareDeniedTier(t *testing.T) {
 	handler := g.HTTPMiddleware(inner)
 
 	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", nil)
-	req.Header.Set("X-Session-Token", addr.Hex())
+	req.Header.Set("X-Session-Token", session.Token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

@@ -10,37 +10,68 @@ import (
 // SessionStore is a thread-safe in-memory session store.
 // For Phase 0 single-instance deployment. Replace with Redis for multi-instance.
 type SessionStore struct {
-	mu       sync.RWMutex
-	sessions map[common.Address]*Session
+	mu          sync.RWMutex
+	sessions    map[string]*Session
+	addressToID map[common.Address]string
 }
 
 // NewSessionStore creates an empty session store with periodic cleanup.
 func NewSessionStore() *SessionStore {
 	ss := &SessionStore{
-		sessions: make(map[common.Address]*Session),
+		sessions:    make(map[string]*Session),
+		addressToID: make(map[common.Address]string),
 	}
 	go ss.cleanup()
 	return ss
 }
 
 // Set stores or updates a session.
-func (ss *SessionStore) Set(addr common.Address, session *Session) {
+func (ss *SessionStore) Set(session *Session) {
 	ss.mu.Lock()
-	ss.sessions[addr] = session
+	if oldID, ok := ss.addressToID[session.Address]; ok && oldID != session.ID {
+		delete(ss.sessions, oldID)
+	}
+	ss.sessions[session.ID] = session
+	ss.addressToID[session.Address] = session.ID
 	ss.mu.Unlock()
 }
 
-// Get retrieves a session by wallet address. Returns nil if not found.
-func (ss *SessionStore) Get(addr common.Address) *Session {
+// GetByID retrieves a session by session ID.
+func (ss *SessionStore) GetByID(id string) *Session {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
-	return ss.sessions[addr]
+	return ss.sessions[id]
 }
 
-// Delete removes a session.
-func (ss *SessionStore) Delete(addr common.Address) {
+// GetByAddress retrieves a session by wallet address. Returns nil if not found.
+func (ss *SessionStore) GetByAddress(addr common.Address) *Session {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	id, ok := ss.addressToID[addr]
+	if !ok {
+		return nil
+	}
+	return ss.sessions[id]
+}
+
+// DeleteByID removes a session by ID.
+func (ss *SessionStore) DeleteByID(id string) {
 	ss.mu.Lock()
-	delete(ss.sessions, addr)
+	session, ok := ss.sessions[id]
+	if ok {
+		delete(ss.addressToID, session.Address)
+	}
+	delete(ss.sessions, id)
+	ss.mu.Unlock()
+}
+
+// DeleteByAddress removes a session by address.
+func (ss *SessionStore) DeleteByAddress(addr common.Address) {
+	ss.mu.Lock()
+	if id, ok := ss.addressToID[addr]; ok {
+		delete(ss.sessions, id)
+		delete(ss.addressToID, addr)
+	}
 	ss.mu.Unlock()
 }
 
@@ -59,9 +90,10 @@ func (ss *SessionStore) cleanup() {
 	for range ticker.C {
 		ss.mu.Lock()
 		now := time.Now()
-		for addr, session := range ss.sessions {
+		for id, session := range ss.sessions {
 			if now.After(session.ExpiresAt) {
-				delete(ss.sessions, addr)
+				delete(ss.addressToID, session.Address)
+				delete(ss.sessions, id)
 			}
 		}
 		ss.mu.Unlock()
