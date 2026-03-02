@@ -5,8 +5,17 @@ import "forge-std/Test.sol";
 import "../src/SessionManager.sol";
 import "../src/PayoutVault.sol";
 
+contract MockNodeRegistry {
+    mapping(address => bool) public isRegistered;
+
+    function setRegistered(address operator, bool registered) external {
+        isRegistered[operator] = registered;
+    }
+}
+
 contract SessionManagerTest is Test {
     SessionManager public sm;
+    MockNodeRegistry public nodeRegistry;
 
     address public owner = address(this);
     address public treasury = address(0xDAD);
@@ -22,6 +31,10 @@ contract SessionManagerTest is Test {
 
     function setUp() public {
         sm = new SessionManager(treasury, OPERATOR_SHARE, PRICE_PER_HOUR, MAX_DURATION);
+        nodeRegistry = new MockNodeRegistry();
+        nodeRegistry.setRegistered(nodeOp, true);
+        nodeRegistry.setRegistered(nodeOp2, true);
+        sm.setNodeRegistry(address(nodeRegistry));
         vm.deal(user1, 10 ether);
         vm.deal(user2, 10 ether);
     }
@@ -91,6 +104,12 @@ contract SessionManagerTest is Test {
         vm.prank(user1);
         vm.expectRevert(SessionManager.InvalidDuration.selector);
         sm.openSession{value: 1 ether}(nodeOp, MAX_DURATION + 1);
+    }
+
+    function test_OpenSessionRevertsNodeNotRegistered() public {
+        vm.prank(user1);
+        vm.expectRevert(SessionManager.NodeNotRegistered.selector);
+        sm.openSession{value: 0.001 ether}(address(0xDEAD), 3600);
     }
 
     // =========================================================================
@@ -421,6 +440,7 @@ contract SessionManagerTest is Test {
     function test_ZeroOperatorShare_SessionClose() public {
         // Deploy with 0% operator share
         SessionManager sm0 = new SessionManager(treasury, 0, PRICE_PER_HOUR, MAX_DURATION);
+        sm0.setNodeRegistry(address(nodeRegistry));
 
         vm.prank(user1);
         uint256 sid = sm0.openSession{value: 0.001 ether}(nodeOp, 3600);

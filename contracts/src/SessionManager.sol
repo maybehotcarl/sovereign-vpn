@@ -5,6 +5,10 @@ import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IPayoutVault} from "./SubscriptionManager.sol";
 
+interface INodeRegistry {
+    function isRegistered(address operator) external view returns (bool);
+}
+
 /// @title SessionManager
 /// @notice On-chain VPN session tracking and payment routing.
 ///         Users pay per-session (paid tier), and payments are split between
@@ -69,6 +73,9 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     ///         earnings route to the vault instead of accumulating here.
     address public payoutVault;
 
+    /// @notice NodeRegistry address used to validate node operators.
+    address public nodeRegistry;
+
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -80,6 +87,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event OperatorShareUpdated(uint256 oldShare, uint256 newShare);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event NodeRegistryUpdated(address oldRegistry, address newRegistry);
     event RewardsDistributed(address[] operators, uint256[] amounts, uint256 totalDistributed);
 
     // =========================================================================
@@ -97,6 +105,8 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     error ZeroAddress();
     error ArrayLengthMismatch();
     error InsufficientTreasuryBalance(uint256 requested, uint256 available);
+    error NodeNotRegistered();
+    error NodeRegistryNotConfigured();
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -134,6 +144,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
         if (node == address(0)) revert ZeroAddress();
         if (activeSession[msg.sender] != 0) revert SessionAlreadyActive();
         if (duration == 0 || duration > maxSessionDuration) revert InvalidDuration();
+        _validateNode(node);
 
         // Calculate required payment
         uint256 required = (pricePerHour * duration) / 3600;
@@ -174,6 +185,7 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
         if (node == address(0)) revert ZeroAddress();
         if (activeSession[user] != 0) revert SessionAlreadyActive();
         if (duration == 0 || duration > maxSessionDuration) revert InvalidDuration();
+        _validateNode(node);
 
         sessionId = nextSessionId++;
         sessions[sessionId] = Session({
@@ -350,5 +362,17 @@ contract SessionManager is Ownable2Step, ReentrancyGuard {
     ///         Set to address(0) to disable and revert to legacy balance accumulation.
     function setPayoutVault(address _payoutVault) external onlyOwner {
         payoutVault = _payoutVault;
+    }
+
+    /// @notice Set the NodeRegistry used to validate nodes in openSession.
+    function setNodeRegistry(address _nodeRegistry) external onlyOwner {
+        if (_nodeRegistry == address(0)) revert ZeroAddress();
+        emit NodeRegistryUpdated(nodeRegistry, _nodeRegistry);
+        nodeRegistry = _nodeRegistry;
+    }
+
+    function _validateNode(address node) internal view {
+        if (nodeRegistry == address(0)) revert NodeRegistryNotConfigured();
+        if (!INodeRegistry(nodeRegistry).isRegistered(node)) revert NodeNotRegistered();
     }
 }
