@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { CronExpressionParser } from "cron-parser";
 import type { Server } from "node:http";
 import type { ScheduledTask } from "node-cron";
 
@@ -24,6 +25,19 @@ let isRunning = false;
 let lastRunAt: string | null = null;
 let nextRunAt: string | null = null;
 let pendingOperatorCount = 0;
+
+// ---------------------------------------------------------------------------
+// Cron helpers
+// ---------------------------------------------------------------------------
+
+function computeNextRun(cronExpr: string): string | null {
+  try {
+    const interval = CronExpressionParser.parse(cronExpr);
+    return interval.next().toISOString();
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown
@@ -77,6 +91,7 @@ async function runCycle(): Promise<void> {
     console.error("[main] Payout cycle threw an unhandled error:", err);
   } finally {
     isRunning = false;
+    nextRunAt = computeNextRun(config.payoutCron);
   }
 }
 
@@ -137,6 +152,17 @@ async function main(): Promise<void> {
   const executorWallet = createExecutorWallet(config.ethRpcUrl, config.executorPrivateKey);
   console.log(`[main] Executor wallet: ${executorWallet.address}`);
 
+  // 3b. Verify the provider is on the expected chain
+  const network = await executorWallet.provider!.getNetwork();
+  if (Number(network.chainId) !== config.chainId) {
+    console.error(
+      `[main] Chain ID mismatch: config expects ${config.chainId}, ` +
+      `provider returned ${network.chainId}`,
+    );
+    process.exit(1);
+  }
+  console.log(`[main] Chain ID verified: ${network.chainId}`);
+
   // 4. Initialize RAILGUN engine
   await initRailgunEngine(config);
 
@@ -167,8 +193,8 @@ async function main(): Promise<void> {
     void runCycle();
   });
 
-  // Compute the next approximate run time for health reporting
-  nextRunAt = `Scheduled: ${config.payoutCron}`;
+  // Compute the next run time for health reporting
+  nextRunAt = computeNextRun(config.payoutCron);
 
   console.log(`[main] Cron job scheduled: ${config.payoutCron}`);
   console.log("[main] Payout service is running. Press Ctrl+C to stop.\n");

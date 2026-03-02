@@ -229,17 +229,19 @@ func TestFullConnectFlow(t *testing.T) {
 	})
 
 	// Step 6: Connect to VPN
-	// Note: This will fail at the wg set command (no real interface), but
-	// we can verify the flow up to that point. In a real test environment
-	// with a WG interface, this would succeed fully.
+	// The wg binary won't exist in CI, so a 500 (provisioning failure) is
+	// acceptable. A 401/403 means the session token flow is broken.
 	t.Run("connect", func(t *testing.T) {
-		if verifyResp == nil {
-			t.Skip("skipping: verify step failed")
+		if verifyResp == nil || verifyResp.SessionToken == "" {
+			t.Skip("skipping: verify step failed or returned no token")
 		}
-		resp, err := client.Connect(verifyResp.Address, keys.PublicKey)
+		resp, err := client.Connect(verifyResp.SessionToken, keys.PublicKey)
 		if err != nil {
-			// Expected to fail because wg command won't work in test env
-			t.Logf("Connect failed (expected in test env without WireGuard): %v", err)
+			if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "403") {
+				t.Fatalf("Connect auth failed (session token rejected): %v", err)
+			}
+			// 500 = WireGuard binary missing in CI — acceptable
+			t.Logf("Connect failed at WireGuard provisioning (expected in CI): %v", err)
 			return
 		}
 		t.Logf("Connected: IP=%s endpoint=%s tier=%s",
@@ -266,19 +268,19 @@ func TestFullConnectFlow(t *testing.T) {
 
 	// Step 7: Check status
 	t.Run("status", func(t *testing.T) {
-		if verifyResp == nil {
-			t.Skip("skipping: verify step failed")
+		if verifyResp == nil || verifyResp.SessionToken == "" {
+			t.Skip("skipping: verify step failed or returned no token")
 		}
-		resp, err := client.Status(verifyResp.Address)
+		resp, err := client.Status(verifyResp.SessionToken)
 		if err != nil {
 			t.Fatalf("Status: %v", err)
 		}
-		// Session should be active (even if VPN connect failed at WG level)
+		// Session was created at verify time, so it should be active
+		// regardless of whether the WireGuard connect step succeeded.
 		if !resp.Connected {
-			t.Logf("Status shows not connected (expected if WG connect failed)")
-		} else {
-			t.Logf("Status: connected=%v tier=%s", resp.Connected, resp.Tier)
+			t.Error("expected session to show connected after successful verify")
 		}
+		t.Logf("Status: connected=%v tier=%s", resp.Connected, resp.Tier)
 	})
 }
 
