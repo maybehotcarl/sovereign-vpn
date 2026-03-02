@@ -91,6 +91,13 @@ func main() {
 
 	flag.Parse()
 
+	if *sessionKey == "" {
+		*sessionKey = os.Getenv("SESSION_KEY")
+	}
+	if *heartbeatKey == "" {
+		*heartbeatKey = os.Getenv("HEARTBEAT_KEY")
+	}
+
 	// Load config
 	var cfg *config.Config
 	if *configPath != "" {

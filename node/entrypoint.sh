@@ -91,17 +91,11 @@ fi
 # Optional: session manager (on-chain session tracking)
 if [ -n "${SESSION_MANAGER:-}" ]; then
     ARGS+=(--session-manager "$SESSION_MANAGER")
-    if [ -n "${SESSION_KEY:-}" ]; then
-        ARGS+=(--session-key "$SESSION_KEY")
-    fi
 fi
 
 # Optional: node registry + heartbeat
 if [ -n "${NODE_REGISTRY:-}" ]; then
     ARGS+=(--node-registry "$NODE_REGISTRY")
-    if [ -n "${HEARTBEAT_KEY:-}" ]; then
-        ARGS+=(--heartbeat-key "$HEARTBEAT_KEY")
-    fi
     if [ -n "${HEARTBEAT_INTERVAL:-}" ]; then
         ARGS+=(--heartbeat-interval "$HEARTBEAT_INTERVAL")
     fi
