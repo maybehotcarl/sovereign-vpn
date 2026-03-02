@@ -123,11 +123,11 @@ export class PayoutProcessor {
       }
 
       result.operatorCount = eligible.length;
-      result.totalAmount = eligible.reduce((sum, op) => sum + op.pendingAmount, 0n);
+      const pendingTotal = eligible.reduce((sum, op) => sum + op.pendingAmount, 0n);
 
       console.log(
         `[processor] Found ${eligible.length} eligible operators, ` +
-        `total pending: ${result.totalAmount} wei`,
+        `total pending: ${pendingTotal} wei`,
       );
 
       // --- Dry run: log and exit ---
@@ -148,6 +148,7 @@ export class PayoutProcessor {
 
       // --- Step 2: Process batch payout on-chain (vault → executor) ---
       const batches = batchOperators(eligible, MAX_BATCH_SIZE);
+      const successfulOperators: EligibleOperator[] = [];
       console.log(
         `[processor] Split into ${batches.length} batch(es) of max ${MAX_BATCH_SIZE}`,
       );
@@ -175,6 +176,8 @@ export class PayoutProcessor {
           // Record receipts for each operator in this batch
           for (const op of batch) {
             this.recordReceipt(op, txHash);
+            successfulOperators.push(op);
+            result.totalAmount += op.pendingAmount;
             result.successCount++;
           }
         } catch (err) {
@@ -212,7 +215,7 @@ export class PayoutProcessor {
           let transferSuccessCount = 0;
           let transferFailureCount = 0;
 
-          for (const op of eligible) {
+          for (const op of successfulOperators) {
             if (!op.railgunAddress) continue;
 
             console.log(
