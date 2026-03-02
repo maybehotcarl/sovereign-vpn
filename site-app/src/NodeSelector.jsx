@@ -4,10 +4,26 @@ const MAIN_GATEWAY = {
   operator: 'Main Gateway',
   endpoint: '6529vpn.io:51820',
   region: 'us-east',
-  rep: 0,
   gatewayUrl: '',
   isMain: true,
 };
+
+function gatewayUrlFromEndpoint(endpoint) {
+  try {
+    const parsed = new URL(`http://${endpoint}`);
+    return `https://${parsed.hostname}`;
+  } catch {
+    return '';
+  }
+}
+
+function hostnameFromEndpoint(endpoint) {
+  try {
+    return new URL(`http://${endpoint}`).hostname;
+  } catch {
+    return endpoint;
+  }
+}
 
 export default function NodeSelector({ onSelect }) {
   const [nodes, setNodes] = useState([]);
@@ -19,10 +35,10 @@ export default function NodeSelector({ onSelect }) {
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data && data.nodes) {
-          const enriched = data.nodes.map(n => {
-            const hostname = n.endpoint.split(':')[0];
-            return { ...n, gatewayUrl: `https://${hostname}` };
-          });
+          const enriched = data.nodes.map(n => ({
+            ...n,
+            gatewayUrl: gatewayUrlFromEndpoint(n.endpoint),
+          }));
           setNodes(enriched);
         }
       })
@@ -75,9 +91,9 @@ export default function NodeSelector({ onSelect }) {
               onClick={() => handleSelect(n)}
             >
               <div className="node-region">{region}</div>
-              <div className="node-name">{n.endpoint.split(':')[0]}</div>
+              <div className="node-name">{hostnameFromEndpoint(n.endpoint)}</div>
               <div className="node-meta">
-                {n.operator.slice(0, 6)}...{n.operator.slice(-4)} &middot; rep {n.rep}
+                {n.operator.slice(0, 6)}...{n.operator.slice(-4)}
               </div>
             </button>
           ))

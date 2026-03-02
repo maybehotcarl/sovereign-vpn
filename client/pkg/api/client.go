@@ -34,9 +34,10 @@ type ChallengeResponse struct {
 
 // VerifyResponse is returned by POST /auth/verify.
 type VerifyResponse struct {
-	Address   string `json:"address"`
-	Tier      string `json:"tier"`
-	ExpiresAt string `json:"expires_at"`
+	Address      string `json:"address"`
+	SessionToken string `json:"session_token"`
+	Tier         string `json:"tier"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 // ConnectResponse is returned by POST /vpn/connect.
@@ -154,6 +155,9 @@ func (c *Client) Status(sessionToken string) (*StatusResponse, error) {
 		return nil, fmt.Errorf("status request: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
 
 	var result StatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -185,13 +189,12 @@ type NodesResponse struct {
 
 // NodeInfo represents a VPN node from the registry.
 type NodeInfo struct {
-	Operator    string `json:"operator"`
-	Endpoint    string `json:"endpoint"`
-	WgPubKey    string `json:"wg_pub_key"`
-	Region      string `json:"region"`
-	Rep         int64  `json:"rep"`
-	RepEligible bool   `json:"rep_eligible"`
-	Active      bool   `json:"active"`
+	Operator     string `json:"operator"`
+	Endpoint     string `json:"endpoint"`
+	WgPubKey     string `json:"wg_pub_key"`
+	Region       string `json:"region"`
+	CardEligible bool   `json:"card_eligible"`
+	Active       bool   `json:"active"`
 }
 
 // ListNodes fetches all active VPN nodes from the gateway.

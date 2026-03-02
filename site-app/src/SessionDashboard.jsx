@@ -102,7 +102,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_token: session.address,
+          session_token: session.sessionToken,
           public_key: session.publicKey,
         }),
       });

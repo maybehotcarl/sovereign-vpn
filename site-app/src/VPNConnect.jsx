@@ -250,7 +250,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_token: vData.address,
+        session_token: vData.session_token,
         public_key: keys.publicKey,
       }),
     });
@@ -278,6 +278,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     if (onSessionCreated) {
       onSessionCreated({
         address: vData.address,
+        sessionToken: vData.session_token,
         tier: vpnData.tier,
         expiresAt: vpnData.expires_at,
         serverEndpoint: vpnData.server_endpoint,

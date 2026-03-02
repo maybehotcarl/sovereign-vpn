@@ -12,7 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/maybehotcarl/sovereign-vpn/client/pkg/api"
 	"github.com/maybehotcarl/sovereign-vpn/client/pkg/wallet"
@@ -66,6 +69,7 @@ Commands:
 Flags (connect/disconnect/status):
   --gateway    Gateway URL (default: http://localhost:8080)
   --key        Path to wallet key file
+  --session-token Session token from a prior 'connect' (required for status/disconnect)
   --wg-conf    Path to write WireGuard config (default: sovereign-vpn.conf)
   --auto-node  Automatically select the best available node
   --region     Preferred region for auto-node selection (e.g. us-east)`)
@@ -106,26 +110,16 @@ func cmdConnect(args []string) {
 		if err != nil {
 			log.Printf("Warning: auto-node discovery failed: %v (using --gateway)", err)
 		} else if resp.Count > 0 {
-			// Pick node with highest rep
-			best := resp.Nodes[0]
-			for _, n := range resp.Nodes[1:] {
-				if n.Rep > best.Rep {
-					best = n
-				}
+			// Select the first eligible node in returned order.
+			selected := resp.Nodes[0]
+			gatewayURL, err := gatewayURLFromEndpoint(selected.Endpoint)
+			if err != nil {
+				log.Printf("Warning: invalid node endpoint %q: %v (using --gateway)", selected.Endpoint, err)
+			} else {
+				targetGateway = gatewayURL
+				log.Printf("Selected node: %s (region=%s, operator=%s)",
+					targetGateway, selected.Region, selected.Operator)
 			}
-			hostname := best.Endpoint
-			// Strip port if present
-			if idx := len(hostname) - 1; idx > 0 {
-				for i := len(hostname) - 1; i >= 0; i-- {
-					if hostname[i] == ':' {
-						hostname = hostname[:i]
-						break
-					}
-				}
-			}
-			targetGateway = "https://" + hostname
-			log.Printf("Selected node: %s (region=%s, rep=%d, operator=%s)",
-				targetGateway, best.Region, best.Rep, best.Operator)
 		} else {
 			log.Println("No nodes available, using default gateway")
 		}
@@ -169,7 +163,7 @@ func cmdConnect(args []string) {
 
 	// Step 5: Connect to VPN
 	log.Println("Requesting VPN connection...")
-	conn, err := client.Connect(verify.Address, keys.PublicKey)
+	conn, err := client.Connect(verify.SessionToken, keys.PublicKey)
 	if err != nil {
 		log.Fatalf("VPN connect failed: %v", err)
 	}
@@ -191,6 +185,7 @@ func cmdConnect(args []string) {
 	fmt.Println()
 	fmt.Println("=== VPN Connected ===")
 	fmt.Printf("  Tier:           %s\n", conn.Tier)
+	fmt.Printf("  Session Token:  %s\n", verify.SessionToken)
 	fmt.Printf("  Client IP:      %s\n", conn.ClientAddress)
 	fmt.Printf("  Server:         %s\n", conn.ServerEndpoint)
 	fmt.Printf("  Expires:        %s\n", conn.ExpiresAt)
@@ -206,21 +201,16 @@ func cmdConnect(args []string) {
 func cmdDisconnect(args []string) {
 	fs := flag.NewFlagSet("disconnect", flag.ExitOnError)
 	gateway := fs.String("gateway", "http://localhost:8080", "Gateway URL")
-	keyFile := fs.String("key", "", "Path to wallet private key file")
+	sessionToken := fs.String("session-token", "", "Session token from a prior connect command")
 	pubKey := fs.String("wg-pubkey", "", "WireGuard public key to disconnect")
 	fs.Parse(args)
 
-	if *keyFile == "" || *pubKey == "" {
-		log.Fatal("--key and --wg-pubkey are required")
-	}
-
-	w, err := wallet.FromKeyFile(*keyFile)
-	if err != nil {
-		log.Fatalf("Failed to load wallet: %v", err)
+	if *sessionToken == "" || *pubKey == "" {
+		log.Fatal("--session-token and --wg-pubkey are required")
 	}
 
 	client := api.NewClient(*gateway)
-	if err := client.Disconnect(w.AddressHex(), *pubKey); err != nil {
+	if err := client.Disconnect(*sessionToken, *pubKey); err != nil {
 		log.Fatalf("Disconnect failed: %v", err)
 	}
 
@@ -230,20 +220,15 @@ func cmdDisconnect(args []string) {
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	gateway := fs.String("gateway", "http://localhost:8080", "Gateway URL")
-	keyFile := fs.String("key", "", "Path to wallet private key file")
+	sessionToken := fs.String("session-token", "", "Session token from a prior connect command")
 	fs.Parse(args)
 
-	if *keyFile == "" {
-		log.Fatal("--key is required")
-	}
-
-	w, err := wallet.FromKeyFile(*keyFile)
-	if err != nil {
-		log.Fatalf("Failed to load wallet: %v", err)
+	if *sessionToken == "" {
+		log.Fatal("--session-token is required")
 	}
 
 	client := api.NewClient(*gateway)
-	status, err := client.Status(w.AddressHex())
+	status, err := client.Status(*sessionToken)
 	if err != nil {
 		log.Fatalf("Status check failed: %v", err)
 	}
@@ -253,6 +238,26 @@ func cmdStatus(args []string) {
 	} else {
 		fmt.Printf("Not connected: %s\n", status.Reason)
 	}
+}
+
+func gatewayURLFromEndpoint(endpoint string) (string, error) {
+	if endpoint == "" {
+		return "", fmt.Errorf("empty endpoint")
+	}
+	host := endpoint
+	if h, _, err := net.SplitHostPort(endpoint); err == nil {
+		host = h
+	} else if h, _, err := net.SplitHostPort(endpoint + ":51820"); err == nil {
+		host = h
+	}
+	if host == "" {
+		return "", fmt.Errorf("missing host")
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	u := &url.URL{Scheme: "https", Host: host}
+	return u.String(), nil
 }
 
 func cmdKeygen(args []string) {
