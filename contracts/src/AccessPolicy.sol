@@ -47,6 +47,7 @@ contract AccessPolicy is Ownable2Step {
     error TokenIdAlreadyKnown(uint256 tokenId);
     error TokenIdNotKnown(uint256 tokenId);
     error ZeroAddress();
+    error InvalidTokenId();
 
     constructor(address _memesContract) Ownable(msg.sender) {
         if (_memesContract == address(0)) revert ZeroAddress();
@@ -101,6 +102,7 @@ contract AccessPolicy is Ownable2Step {
     /// @param tokenId The Memes token ID for this project's card
     function setThisCardTokenId(uint256 tokenId) external onlyOwner {
         if (thisCardTokenIdLocked) revert ThisCardTokenIdAlreadyLocked();
+        if (tokenId == 0) revert InvalidTokenId();
         thisCardTokenId = tokenId;
         // Also add it to known token IDs if not already there
         if (!isKnownTokenId[tokenId]) {

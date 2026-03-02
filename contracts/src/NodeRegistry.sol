@@ -98,6 +98,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     error NoFundsToWithdraw();
     error NotEligibleOperator();
     error InvalidRailgunAddress();
+    error ZeroAddress();
 
     // =========================================================================
     //                          CONSTRUCTOR
@@ -113,6 +114,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         address _memesContract,
         uint256 _operatorCardId
     ) Ownable(msg.sender) {
+        if (_memesContract == address(0)) revert ZeroAddress();
         minStake = _minStake;
         heartbeatInterval = _heartbeatInterval;
         memesContract = _memesContract;
@@ -221,9 +223,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     /// @param _railgunAddress RAILGUN shielded address (must start with "0zk")
     function setRailgunAddress(string calldata _railgunAddress) external {
         if (!isRegistered[msg.sender]) revert NotRegistered();
-        // Validate 0zk prefix
+        // Validate 0zk prefix and minimum length
         bytes memory addrBytes = bytes(_railgunAddress);
-        if (addrBytes.length < 3 || addrBytes[0] != "0" || addrBytes[1] != "z" || addrBytes[2] != "k") {
+        if (addrBytes.length <= 10 || addrBytes[0] != "0" || addrBytes[1] != "z" || addrBytes[2] != "k") {
             revert InvalidRailgunAddress();
         }
         railgunAddresses[msg.sender] = _railgunAddress;

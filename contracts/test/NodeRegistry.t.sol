@@ -538,6 +538,11 @@ contract NodeRegistryTest is Test {
         assertTrue(registry.isRegistered(randomUser));
     }
 
+    function test_ConstructorRevertsZeroMemesContract() public {
+        vm.expectRevert(NodeRegistry.ZeroAddress.selector);
+        new NodeRegistry(MIN_STAKE, HEARTBEAT_INTERVAL, address(0), OPERATOR_CARD_ID);
+    }
+
     function test_ConstructorStoresMemesAndCardId() public view {
         assertEq(registry.memesContract(), address(memes));
         assertEq(registry.operatorCardId(), OPERATOR_CARD_ID);
@@ -598,13 +603,13 @@ contract NodeRegistryTest is Test {
         registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
 
         vm.prank(operator1);
-        registry.setRailgunAddress("0zkFirst");
+        registry.setRailgunAddress("0zkFirstAddress");
 
         vm.prank(operator1);
-        registry.setRailgunAddress("0zkSecond");
+        registry.setRailgunAddress("0zkSecondAddress");
 
         string memory addr = registry.getRailgunAddress(operator1);
-        assertEq(keccak256(bytes(addr)), keccak256(bytes("0zkSecond")));
+        assertEq(keccak256(bytes(addr)), keccak256(bytes("0zkSecondAddress")));
     }
 
     function test_SetRailgunAddressRevertsNotRegistered() public {
@@ -620,6 +625,15 @@ contract NodeRegistryTest is Test {
         vm.prank(operator1);
         vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
         registry.setRailgunAddress("0xNotRailgun");
+    }
+
+    function test_SetRailgunAddressRevertsTooShort() public {
+        vm.prank(operator1);
+        registry.register{value: 0.05 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(operator1);
+        vm.expectRevert(NodeRegistry.InvalidRailgunAddress.selector);
+        registry.setRailgunAddress("0zkShort"); // 8 chars, <= 10
     }
 
     function test_SetRailgunAddressRevertsEmpty() public {
