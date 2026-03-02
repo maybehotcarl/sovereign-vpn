@@ -171,6 +171,13 @@ contract AccessPolicyTest is Test {
         assertEq(freshPolicy.thisCardTokenId(), 42);
     }
 
+    function test_setThisCardTokenIdRevertsZero() public {
+        AccessPolicy freshPolicy = new AccessPolicy(address(memes));
+
+        vm.expectRevert(AccessPolicy.InvalidTokenId.selector);
+        freshPolicy.setThisCardTokenId(0);
+    }
+
     function test_lockThisCardTokenId() public {
         assertFalse(policy.thisCardTokenIdLocked());
 
