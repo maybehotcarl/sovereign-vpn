@@ -22,6 +22,13 @@ MAX_TOKEN_ID="${MAX_TOKEN_ID:-350}"
 WG_DIR="/etc/wireguard"
 WG_INTERFACE="wg0"
 
+# ---- Detect default route interface ----
+DEFAULT_IF=$(ip route show default | awk '{print $5}')
+if [ -z "$DEFAULT_IF" ]; then
+    echo "Warning: could not detect default route interface, falling back to eth0"
+    DEFAULT_IF="eth0"
+fi
+
 # ---- WireGuard key management ----
 if [ -n "${WG_PRIVATE_KEY:-}" ]; then
     echo "$WG_PRIVATE_KEY" > "$WG_DIR/privatekey"
@@ -48,8 +55,8 @@ cat > "$WG_DIR/$WG_INTERFACE.conf" <<EOF
 Address = $WG_SERVER_IP
 PrivateKey = $PRIV_KEY
 ListenPort = $WG_PORT
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IF -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IF -j MASQUERADE
 EOF
 
 chmod 600 "$WG_DIR/$WG_INTERFACE.conf"
@@ -114,5 +121,15 @@ if [ -n "${ZK_API_URL:-}" ]; then
     fi
 fi
 
+# ---- Shutdown trap ----
+cleanup() {
+    echo "Shutting down..."
+    wg-quick down "$WG_INTERFACE" 2>/dev/null || true
+    iptables -t nat -D POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 echo "  Starting gateway..."
-exec gateway "${ARGS[@]}"
+gateway "${ARGS[@]}" &
+wait $!
