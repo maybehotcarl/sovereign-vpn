@@ -42,6 +42,7 @@ type Server struct {
 	peerOwners  map[string]common.Address
 	mux         *http.ServeMux
 	corsOrigin  string
+	rateLimiter *ipLimiter
 }
 
 // New creates a new gateway server.
@@ -49,13 +50,14 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	gate := nftgate.NewGate(checker, cfg.CredentialTTL)
 
 	s := &Server{
-		cfg:     cfg,
-		siwe:    siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
-		checker: checker,
-		gate:    gate,
-		wg:      wg,
-		peerOwners: make(map[string]common.Address),
-		mux:     http.NewServeMux(),
+		cfg:         cfg,
+		siwe:        siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
+		checker:     checker,
+		gate:        gate,
+		wg:          wg,
+		peerOwners:  make(map[string]common.Address),
+		mux:         http.NewServeMux(),
+		rateLimiter: newIPLimiter(cfg.RateLimitPerMinute),
 	}
 
 	// Public endpoints (no session required)
@@ -129,12 +131,14 @@ func (s *Server) SetThisCardID(id int64) {
 	s.thisCardID = id
 }
 
-// Handler returns the HTTP handler.
+// Handler returns the HTTP handler with rate limiting and CORS applied.
 func (s *Server) Handler() http.Handler {
-	if s.corsOrigin == "" {
-		return s.mux
+	var h http.Handler = s.mux
+	if s.corsOrigin != "" {
+		h = s.corsMiddleware(h)
 	}
-	return s.corsMiddleware(s.mux)
+	h = s.rateLimiter.middleware(h)
+	return h
 }
 
 // corsMiddleware wraps a handler with CORS headers for the configured origin.
@@ -158,7 +162,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) ListenAndServe() error {
 	srv := &http.Server{
 		Addr:         s.cfg.ListenAddr,
-		Handler:      s.mux,
+		Handler:      s.Handler(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
