@@ -170,7 +170,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) ListenAndServe() error {
 	srv := &http.Server{
 		Addr:         s.cfg.ListenAddr,
-		Handler:      s.mux,
+		Handler:      s.Handler(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -254,7 +254,7 @@ type verifyRequest struct {
 
 // POST /auth/verify -- verify SIWE signature + check NFT (or ZK proof) -> create session
 // Request: { "message": "...", "signature": "0x...", "zk_proof": { ... } }
-// Response: { "address": "0x...", "tier": "free|paid|denied", "expires_at": "..." }
+// Response: { "address": "0x...", "session_token": "<opaque>", "tier": "free|paid|denied", "expires_at": "..." }
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req verifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -442,7 +442,7 @@ type ConnectResponse struct {
 }
 
 // POST /vpn/connect -- provision a WireGuard peer for an authenticated session
-// Request: { "session_token": "0x...", "public_key": "base64-wg-pubkey" }
+// Request: { "session_token": "<opaque-token>", "public_key": "base64-wg-pubkey" }
 // Response: WireGuard configuration
 func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	var req ConnectRequest
@@ -556,7 +556,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /vpn/disconnect -- remove a WireGuard peer
-// Request: { "session_token": "0x...", "public_key": "base64-wg-pubkey" }
+// Request: { "session_token": "<opaque-token>", "public_key": "base64-wg-pubkey" }
 func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 	var req ConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -602,7 +602,7 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /vpn/status -- check connection status
-// Query param: ?session_token=0x...
+// Query param: ?session_token=<opaque-token>
 func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("session_token")
 	if token == "" {

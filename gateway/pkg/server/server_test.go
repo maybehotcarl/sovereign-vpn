@@ -107,12 +107,12 @@ func TestChallengeRequestValidation(t *testing.T) {
 }
 
 func TestConnectRequestValidation(t *testing.T) {
-	body := `{"session_token": "0x123", "public_key": "abc123"}`
+	body := `{"session_token": "tok_abc123def456", "public_key": "abc123"}`
 	var req ConnectRequest
 	json.NewDecoder(strings.NewReader(body)).Decode(&req)
 
-	if req.SessionToken != "0x123" {
-		t.Errorf("expected 0x123, got %s", req.SessionToken)
+	if req.SessionToken != "tok_abc123def456" {
+		t.Errorf("expected tok_abc123def456, got %s", req.SessionToken)
 	}
 	if req.PublicKey != "abc123" {
 		t.Errorf("expected abc123, got %s", req.PublicKey)
