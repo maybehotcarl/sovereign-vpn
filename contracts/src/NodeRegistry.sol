@@ -341,6 +341,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
 
     /// @notice Get all active nodes (for client node discovery).
     ///         The gateway further filters by card ownership in real-time.
+    /// @dev TODO(prod-scale): Replace this unbounded full-list scan with pagination/indexed reads.
     function getActiveNodes() external view returns (Node[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < nodeList.length; i++) {
@@ -359,6 +360,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Get active nodes in a specific region.
+    /// @dev TODO(prod-scale): Replace this unbounded full-list scan with pagination/indexed reads.
     function getActiveNodesByRegion(string calldata region) external view returns (Node[] memory) {
         bytes32 regionHash = keccak256(bytes(region));
         uint256 count = 0;
@@ -386,6 +388,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Get nodes with overdue heartbeats (for monitoring/slashing).
+    /// @dev TODO(prod-scale): Replace this unbounded full-list scan with pagination/indexed reads.
     function getOverdueNodes() external view returns (address[] memory) {
         uint256 count = 0;
         for (uint256 i = 0; i < nodeList.length; i++) {
@@ -411,6 +414,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     //                          INTERNAL
     // =========================================================================
 
+    /// @dev TODO(prod-scale): Track operator index in storage for O(1) swap-and-pop removal.
     function _removeFromList(address operator) internal {
         uint256 len = nodeList.length;
         for (uint256 i = 0; i < len; i++) {

@@ -70,6 +70,7 @@ export async function getOperatorsWithRailgun(
   const result = new Map<string, string>();
 
   // Step 1: get the full list of registered operator addresses
+  // TODO(prod-scale): Replace full-list read with paginated/indexed operator discovery.
   const operators: string[] = await contract.getNodeList();
   console.log(`[registry] Total registered operators: ${operators.length}`);
 

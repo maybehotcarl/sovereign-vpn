@@ -643,6 +643,7 @@ type NodeResponse struct {
 
 // GET /nodes — list all active VPN nodes from the on-chain registry.
 // Only returns nodes whose operators hold the required card.
+// TODO(prod-scale): Move to paginated/indexed node reads before large-node mainnet rollout.
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if s.registry == nil {
 		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
@@ -666,6 +667,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /nodes/region?region=us-east — list active nodes in a region.
+// TODO(prod-scale): Move to paginated/indexed node reads before large-node mainnet rollout.
 func (s *Server) handleListNodesByRegion(w http.ResponseWriter, r *http.Request) {
 	if s.registry == nil {
 		writeError(w, http.StatusServiceUnavailable, "node registry not configured")
