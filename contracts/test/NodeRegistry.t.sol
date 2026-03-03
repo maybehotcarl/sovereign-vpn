@@ -659,4 +659,120 @@ contract NodeRegistryTest is Test {
         emit NodeRegistry.RailgunAddressSet(operator1, "0zkTestAddr");
         registry.setRailgunAddress("0zkTestAddr");
     }
+
+    // =========================================================================
+    //                          ALLOWLIST
+    // =========================================================================
+
+    function test_OwnerCanSetAndUnsetAllowlist() public {
+        registry.setAllowlisted(randomUser, true);
+        assertTrue(registry.allowlisted(randomUser));
+
+        registry.setAllowlisted(randomUser, false);
+        assertFalse(registry.allowlisted(randomUser));
+    }
+
+    function test_SetAllowlistedRevertsNotOwner() public {
+        vm.prank(randomUser);
+        vm.expectRevert();
+        registry.setAllowlisted(randomUser, true);
+    }
+
+    function test_SetAllowlistedEmitsEvent() public {
+        vm.expectEmit(true, false, false, true);
+        emit NodeRegistry.AllowlistUpdated(randomUser, true);
+        registry.setAllowlisted(randomUser, true);
+    }
+
+    function test_AllowlistedRegistersWithNoCardAndZeroStake() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        registry.register{value: 0}("1.2.3.4:51820", "key==", "us-east");
+
+        assertTrue(registry.isRegistered(randomUser));
+        NodeRegistry.Node memory node = registry.getNode(randomUser);
+        assertEq(node.stakedAmount, 0);
+        assertTrue(node.active);
+    }
+
+    function test_AllowlistedCanOptionallyStake() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        registry.register{value: 0.5 ether}("1.2.3.4:51820", "key==", "us-east");
+
+        NodeRegistry.Node memory node = registry.getNode(randomUser);
+        assertEq(node.stakedAmount, 0.5 ether);
+    }
+
+    function test_AllowlistedCanReactivateWithoutCard() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        registry.register{value: 0}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(randomUser);
+        registry.deactivate();
+
+        vm.prank(randomUser);
+        registry.reactivate();
+
+        NodeRegistry.Node memory node = registry.getNode(randomUser);
+        assertTrue(node.active);
+    }
+
+    function test_IsEligibleOperatorReturnsTrueForAllowlisted() public {
+        assertFalse(registry.isEligibleOperator(randomUser));
+
+        registry.setAllowlisted(randomUser, true);
+        assertTrue(registry.isEligibleOperator(randomUser));
+    }
+
+    function test_AllowlistedStillBlockedOnDuplicateRegistration() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        registry.register{value: 0}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.AlreadyRegistered.selector);
+        registry.register{value: 0}("5.6.7.8:51820", "key2==", "eu-west");
+    }
+
+    function test_RemovingAllowlistReenforcesCardCheckOnReactivate() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        registry.register{value: 0}("1.2.3.4:51820", "key==", "us-east");
+
+        vm.prank(randomUser);
+        registry.deactivate();
+
+        // Remove from allowlist
+        registry.setAllowlisted(randomUser, false);
+
+        // Reactivation should fail — no card, no allowlist
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.NotEligibleOperator.selector);
+        registry.reactivate();
+    }
+
+    function test_AllowlistDoesNotBypassEndpointPubkeyValidation() public {
+        vm.deal(randomUser, 10 ether);
+        registry.setAllowlisted(randomUser, true);
+
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.InvalidEndpoint.selector);
+        registry.register{value: 0}("", "key==", "us-east");
+
+        vm.prank(randomUser);
+        vm.expectRevert(NodeRegistry.InvalidWgPubKey.selector);
+        registry.register{value: 0}("1.2.3.4:51820", "", "us-east");
+    }
 }

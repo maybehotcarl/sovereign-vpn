@@ -65,6 +65,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     /// @notice Operator → RAILGUN 0zk address for private payouts.
     mapping(address => string) public railgunAddresses;
 
+    /// @notice Owner-managed allowlist: bypasses card and stake requirements for pre-launch PoC.
+    mapping(address => bool) public allowlisted;
+
     // =========================================================================
     //                          EVENTS
     // =========================================================================
@@ -82,6 +85,7 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     event HeartbeatIntervalUpdated(uint256 oldInterval, uint256 newInterval);
     event RailgunAddressSet(address indexed operator, string railgunAddress);
     event OperatorCardIdUpdated(uint256 oldCardId, uint256 newCardId);
+    event AllowlistUpdated(address indexed operator, bool status);
 
     // =========================================================================
     //                          ERRORS
@@ -134,9 +138,12 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         string calldata wgPubKey,
         string calldata region
     ) external payable nonReentrant {
-        if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
+        bool _isAllowlisted = allowlisted[msg.sender];
+        if (!_isAllowlisted) {
+            if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
+        }
         if (isRegistered[msg.sender]) revert AlreadyRegistered();
-        if (msg.value < minStake) revert InsufficientStake(msg.value, minStake);
+        if (!_isAllowlisted && msg.value < minStake) revert InsufficientStake(msg.value, minStake);
         if (bytes(endpoint).length == 0) revert InvalidEndpoint();
         if (bytes(wgPubKey).length == 0) revert InvalidWgPubKey();
 
@@ -173,9 +180,11 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         emit NodeDeactivated(msg.sender);
     }
 
-    /// @notice Reactivate a previously deactivated node. Must still hold the operator card.
+    /// @notice Reactivate a previously deactivated node. Must still hold the operator card (unless allowlisted).
     function reactivate() external {
-        if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
+        if (!allowlisted[msg.sender]) {
+            if (IERC1155Minimal(memesContract).balanceOf(msg.sender, operatorCardId) == 0) revert NotEligibleOperator();
+        }
         if (!isRegistered[msg.sender]) revert NotRegistered();
         if (nodes[msg.sender].active) revert NodeAlreadyActive();
         if (nodes[msg.sender].slashed) revert NodeSlashedCannotReactivate();
@@ -300,13 +309,19 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
         operatorCardId = newCardId;
     }
 
+    /// @notice Add or remove an address from the operator allowlist.
+    function setAllowlisted(address operator, bool status) external onlyOwner {
+        emit AllowlistUpdated(operator, status);
+        allowlisted[operator] = status;
+    }
+
     // =========================================================================
     //                          VIEW FUNCTIONS
     // =========================================================================
 
-    /// @notice Check if an operator currently holds the required operator card.
+    /// @notice Check if an operator currently holds the required operator card or is allowlisted.
     function isEligibleOperator(address operator) external view returns (bool) {
-        return IERC1155Minimal(memesContract).balanceOf(operator, operatorCardId) > 0;
+        return allowlisted[operator] || IERC1155Minimal(memesContract).balanceOf(operator, operatorCardId) > 0;
     }
 
     /// @notice Get the full node data for an operator.
