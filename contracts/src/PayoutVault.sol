@@ -179,6 +179,8 @@ contract PayoutVault is Ownable2Step, ReentrancyGuard {
     ///         Resets totalPending to 0. Individual pendingPayouts mappings become
     ///         stale but cannot be processed (no ETH to send). Re-crediting after
     ///         re-funding requires manual reconciliation off-chain.
+    /// @dev TODO(prod): Define an on-chain reconciliation/reset path for stale
+    ///      pendingPayouts after emergency withdrawal (batch clear or migration).
     function emergencyWithdrawETH() external onlyOwner nonReentrant {
         uint256 balance = address(this).balance;
         if (balance == 0) revert ZeroAmount();
@@ -221,6 +223,10 @@ contract PayoutVault is Ownable2Step, ReentrancyGuard {
     //                          INTERNAL
     // =========================================================================
 
+    /// @dev TODO(prod): Add explicit `amount <= address(this).balance` guard with
+    ///      dedicated error so vault insolvency fails fast with clear diagnostics.
+    ///      Keep `pendingPayouts` as entitlement source of truth (do not replace
+    ///      operator accounting with global vault balance checks).
     function _processSinglePayout(address operator, uint256 amount) internal {
         if (operator == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();

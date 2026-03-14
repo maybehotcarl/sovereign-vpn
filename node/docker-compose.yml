@@ -15,6 +15,11 @@ services:
     volumes:
       - wg-keys:/etc/wireguard
     env_file: .env
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "1"
     restart: unless-stopped
 
 volumes:

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,8 +16,8 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
-	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/ratelimit"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/payoutvault"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/ratelimit"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
@@ -27,15 +28,15 @@ import (
 
 // Server is the Sovereign VPN gateway.
 type Server struct {
-	cfg        *config.Config
-	siwe       *siwe.Service
-	checker    nftcheck.AccessChecker
-	gate       *nftgate.Gate
-	wg         *wireguard.Manager
-	registry   *noderegistry.Registry
-	userRep    *rep6529.Checker
-	sessionMgr *sessionmgr.Manager
-	subMgr     *subscriptionmgr.Manager
+	cfg         *config.Config
+	siwe        *siwe.Service
+	checker     nftcheck.AccessChecker
+	gate        *nftgate.Gate
+	wg          *wireguard.Manager
+	registry    *noderegistry.Registry
+	userRep     *rep6529.Checker
+	sessionMgr  *sessionmgr.Manager
+	subMgr      *subscriptionmgr.Manager
 	zkClient    *zkverify.Client
 	payoutVault *payoutvault.Client
 	thisCardID  int64
@@ -56,14 +57,14 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	}
 
 	s := &Server{
-		cfg:     cfg,
-		siwe:    siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
-		checker: checker,
-		gate:    gate,
-		wg:      wg,
+		cfg:        cfg,
+		siwe:       siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
+		checker:    checker,
+		gate:       gate,
+		wg:         wg,
 		peerOwners: make(map[string]common.Address),
-		mux:     http.NewServeMux(),
-		limiter: limiter,
+		mux:        http.NewServeMux(),
+		limiter:    limiter,
 	}
 
 	// Public endpoints (no session required)
@@ -285,13 +286,13 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			PublicSignals: req.ZKProof.PublicSignals,
 		})
 		if err != nil {
-			log.Printf("ZK API error for %s: %v", auth.Address.Hex(), err)
+			log.Printf("ZK API error during proof verification: %v", err)
 			writeError(w, http.StatusBadGateway, "ZK verification service unavailable")
 			return
 		}
 
 		if !zkResult.Valid {
-			log.Printf("ZK proof invalid for %s: %s", auth.Address.Hex(), zkResult.Reason)
+			log.Printf("ZK proof invalid: type=%s reason=%s", req.ZKProof.ProofType, zkResult.Reason)
 			writeJSON(w, http.StatusForbidden, VerifyResponse{
 				Address: auth.Address.Hex(),
 				Tier:    nftcheck.TierDenied.String(),
@@ -304,12 +305,12 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			Tier:      s.tierFromZKProof(req.ZKProof),
 			CheckedAt: time.Now(),
 		}
-		log.Printf("ZK proof valid for %s: type=%s tier=%s", auth.Address.Hex(), req.ZKProof.ProofType, result.Tier)
+		log.Printf("ZK proof valid: type=%s tier=%s", req.ZKProof.ProofType, result.Tier)
 	} else {
 		// On-chain path: existing NFT check
 		result, err = s.checker.Check(r.Context(), auth.Address)
 		if err != nil {
-			log.Printf("Error checking NFT access for %s: %v", auth.Address.Hex(), err)
+			log.Printf("Error checking NFT access: %v", err)
 			writeError(w, http.StatusInternalServerError, "failed to check NFT access")
 			return
 		}
@@ -328,9 +329,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	if s.userRep != nil {
 		repResult, err := s.userRep.CheckRep(r.Context(), auth.Address.Hex())
 		if err != nil {
-			log.Printf("Warning: user rep check failed for %s: %v (allowing access)", auth.Address.Hex(), err)
+			log.Printf("Warning: user rep check failed (allowing access): %v", err)
 		} else if repResult.Rating < 0 {
-			log.Printf("Access denied (banned): %s rep=%d in %q", auth.Address.Hex(), repResult.Rating, s.userRep.Category())
+			log.Printf("Access denied (banned): rep=%d category=%q", repResult.Rating, s.userRep.Category())
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"address": auth.Address.Hex(),
 				"tier":    "denied",
@@ -353,7 +354,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		s.sessionMgr.OpenFreeSession(auth.Address, uint64(s.cfg.CredentialTTL.Seconds()))
 	}
 
-	log.Printf("Access granted: %s tier=%s", auth.Address.Hex(), result.Tier)
+	log.Printf("Access granted: tier=%s", result.Tier)
 
 	writeJSON(w, http.StatusOK, VerifyResponse{
 		Address:      auth.Address.Hex(),
@@ -427,7 +428,7 @@ func (s *Server) handleSubscriptionTiers(w http.ResponseWriter, r *http.Request)
 // ConnectRequest is the body for POST /vpn/connect.
 type ConnectRequest struct {
 	SessionToken string `json:"session_token"` // Opaque session token from /auth/verify
-	PublicKey    string `json:"public_key"`     // Client's WireGuard public key
+	PublicKey    string `json:"public_key"`    // Client's WireGuard public key
 }
 
 // ConnectResponse is returned by POST /vpn/connect.
@@ -486,7 +487,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 				}
 				expiresAt := time.Now().Add(remaining)
 				s.setPeerOwner(req.PublicKey, session.Address)
-				log.Printf("VPN connected (subscription): %s -> %s (remaining=%s)", session.Address.Hex(), peerCfg.ClientAddress, remaining)
+				log.Printf("VPN connected (subscription): remaining=%s", remaining)
 				writeJSON(w, http.StatusOK, ConnectResponse{
 					ServerPublicKey: peerCfg.ServerPublicKey,
 					ServerEndpoint:  peerCfg.ServerEndpoint,
@@ -514,7 +515,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 					}
 					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
 					s.setPeerOwner(req.PublicKey, session.Address)
-					log.Printf("VPN connected (paid): %s -> %s (duration=%ds)", session.Address.Hex(), peerCfg.ClientAddress, onChain.Duration)
+					log.Printf("VPN connected (paid): duration=%ds", onChain.Duration)
 					writeJSON(w, http.StatusOK, ConnectResponse{
 						ServerPublicKey: peerCfg.ServerPublicKey,
 						ServerEndpoint:  peerCfg.ServerEndpoint,
@@ -541,7 +542,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("VPN connected: %s -> %s", session.Address.Hex(), peerCfg.ClientAddress)
+	log.Printf("VPN connected: tier=%s", session.Tier)
 	s.setPeerOwner(req.PublicKey, session.Address)
 
 	writeJSON(w, http.StatusOK, ConnectResponse{
@@ -601,12 +602,26 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 }
 
+func bearerToken(r *http.Request) string {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if auth == "" {
+		return ""
+	}
+
+	parts := strings.Fields(auth)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+
+	return parts[1]
+}
+
 // GET /vpn/status -- check connection status
-// Query param: ?session_token=<opaque-token>
+// Authorization: Bearer <opaque-token>
 func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("session_token")
+	token := bearerToken(r)
 	if token == "" {
-		writeError(w, http.StatusBadRequest, "session_token query param required")
+		writeError(w, http.StatusBadRequest, "Authorization Bearer token required")
 		return
 	}
 
@@ -636,9 +651,9 @@ type NodeResponse struct {
 	Endpoint       string `json:"endpoint"`
 	WgPubKey       string `json:"wg_pub_key"`
 	Region         string `json:"region"`
-	CardEligible   bool   `json:"card_eligible"`              // whether operator holds the required card
+	CardEligible   bool   `json:"card_eligible"` // whether operator holds the required card
 	Active         bool   `json:"active"`
-	RailgunAddress string `json:"railgun_address,omitempty"`  // RAILGUN 0zk address
+	RailgunAddress string `json:"railgun_address,omitempty"` // RAILGUN 0zk address
 }
 
 // GET /nodes — list all active VPN nodes from the on-chain registry.

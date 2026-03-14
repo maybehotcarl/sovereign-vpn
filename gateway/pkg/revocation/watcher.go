@@ -171,17 +171,15 @@ func (w *Watcher) handleLog(vLog types.Log) {
 		if len(vLog.Data) >= 32 {
 			id.SetBytes(vLog.Data[:32])
 		}
-		log.Printf("[revocation] TransferSingle: from=%s to=%s tokenId=%s",
-			truncAddr(from), truncAddr(to), id.String())
+		log.Printf("[revocation] TransferSingle detected: tokenId=%s", id.String())
 
 	case transferBatchSig:
-		log.Printf("[revocation] TransferBatch: from=%s to=%s",
-			truncAddr(from), truncAddr(to))
+		log.Printf("[revocation] TransferBatch detected")
 	}
 
 	// Revoke the sender's session (they no longer hold the NFT)
 	if from != zeroAddr {
-		log.Printf("[revocation] Revoking session for sender: %s", from.Hex())
+		log.Printf("[revocation] Revoking sender session after transfer")
 		w.revoker.InvalidateAndRevoke(from)
 	}
 

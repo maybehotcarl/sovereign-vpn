@@ -18,7 +18,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 - None found in Solidity logic itself.
 
 ### High
-- `SessionManager.openSession` does not validate that `node` is a registered/active node in `NodeRegistry`, so users can pay arbitrary addresses as “node operators” (`contracts/src/SessionManager.sol:133`).
+- **[FIXED]** `SessionManager.openSession` does not validate that `node` is a registered/active node in `NodeRegistry`, so users can pay arbitrary addresses as “node operators” (`contracts/src/SessionManager.sol:133`). *Fixed in 4c0272b.*
   - Category: Bugs/logic, Security, Config consistency.
 
 ### Medium
@@ -30,7 +30,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
   - Category: Input validation.
 
 ### Low
-- Contract script/docs inconsistency: deployment guidance references non-existent `registerNode` function (`contracts/script/DeployNodeRegistry.s.sol:48`), actual function is `register`.
+- **[FIXED]** Contract script/docs inconsistency: deployment guidance references non-existent `registerNode` function (`contracts/script/DeployNodeRegistry.s.sol:48`), actual function is `register`. *Fixed in 91e71f1.*
   - Category: Documentation consistency.
 
 ### Testing gaps
@@ -47,25 +47,25 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 ## gateway/
 
 ### Critical
-- **Session hijack/auth bypass**: session token is just wallet address and not a secret; `/vpn/connect` trusts `session_token` directly (`gateway/pkg/server/server.go:429`, `gateway/pkg/server/server.go:441`). Any party knowing an active wallet address can connect with their own WG key.
+- **[FIXED]** ~~**Session hijack/auth bypass**: session token is just wallet address and not a secret.~~ Sessions now use HMAC-signed opaque tokens; `/vpn/connect` validates via `GetSessionByToken`. *Fixed in 0d52584.*
   - Category: Security (auth bypass).
 
 ### High
-- `parseAddress` is permissive and maps invalid hex chars to `0` nibble, enabling malformed-token ambiguity/spoofing (`gateway/pkg/server/server.go:777`, `gateway/pkg/server/server.go:795`).
+- **[FIXED]** `parseAddress` is permissive and maps invalid hex chars to `0` nibble. Now uses `common.IsHexAddress` for strict validation. *Fixed in f256f2c.*
   - Category: Security, input validation.
 - `/vpn/disconnect` has no session ownership validation and removes peers by public key only (`gateway/pkg/server/server.go:535`, `gateway/pkg/server/server.go:542`). Enables easy DoS if key leaks or is guessed.
   - Category: Security.
 - Revocation watcher revokes both sender and receiver sessions on transfer (`gateway/pkg/revocation/watcher.go:181`, `gateway/pkg/revocation/watcher.go:188`). Receiver should usually only get cache invalidation; current behavior can disconnect newly eligible users.
   - Category: Bugs/logic.
-- SIWE verification checks only domain + nonce; it does not enforce URI, chain ID, issued-at/expiration fields from EIP-4361 (`gateway/pkg/siwe/siwe.go:141`, `gateway/pkg/siwe/siwe.go:153`, `gateway/pkg/siwe/siwe.go:181`).
+- **[PARTIAL]** SIWE verification checks only domain + nonce; it does not enforce URI, chain ID, issued-at/expiration fields from EIP-4361. *Chain ID enforcement added in f256f2c; URI and expiry checks remain open.*
   - Category: Security.
 
 ### Medium
-- Config declares `rate_limit_per_minute` but no request path uses it (`gateway/pkg/config/config.go:32`; only references are config declarations/examples). Effective brute-force/rate limiting is missing.
+- **[FIXED]** Config declares `rate_limit_per_minute` but no request path uses it. Per-IP rate limiter middleware now wraps all requests. *Fixed in 0d52584.*
   - Category: Security, config.
-- `SessionManager` integration derives `node` from tx signer key (`gateway/pkg/sessionmgr/sessionmgr.go:147`, `gateway/pkg/sessionmgr/sessionmgr.go:161`). If owner key is not the node operator, on-chain free-session attribution is wrong.
+- **[FIXED]** `SessionManager` integration derives `node` from tx signer key. Now uses separate `nodeAddr` field with `SetNodeOperator()`. *Fixed in 0d52584.*
   - Category: Logic consistency.
-- `Server.ListenAndServe()` bypasses CORS wrapper by serving `s.mux` directly instead of `s.Handler()` (`gateway/pkg/server/server.go:154`, `gateway/pkg/server/server.go:157`).
+- **[FIXED]** `Server.ListenAndServe()` bypasses CORS wrapper by serving `s.mux` directly instead of `s.Handler()`. Now uses `s.Handler()`.
   - Category: Config/deployment consistency.
 
 ### Low
@@ -87,7 +87,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 - None.
 
 ### High
-- Auto-node selection logic depends on `rep` fields that server no longer returns (`client/pkg/api/client.go:192`, `gateway/pkg/server/server.go:593`), so selection degenerates to first node and displays misleading rep values (`client/cmd/svpn/main.go:109`).
+- **[FIXED]** Auto-node selection logic depends on `rep` fields that server no longer returns. Client now uses card-eligibility fields. *Fixed in 5f4c0e8.*
   - Category: Logic consistency.
 
 ### Medium
@@ -121,13 +121,13 @@ Method: deep source read of all files in-scope (not just listings), plus targete
   - Category: Logic/data correctness.
 
 ### Medium
-- No explicit runtime chain-ID sanity check against provider despite config contract claiming it (`payout-service/src/config.ts`, `payout-service/src/index.ts`).
+- **[FIXED]** No explicit runtime chain-ID sanity check against provider. Now verifies `provider.getNetwork().chainId` against config at startup. *Fixed in 9907bea.*
   - Category: Config/deployment.
 - Service proceeds without RAILGUN mnemonic (by design), but this silently degrades privacy guarantees and centralizes funds in executor wallet.
   - Category: Security/operational risk.
 
 ### Low
-- Health `nextRunAt` is not an actual timestamp (`payout-service/src/index.ts`).
+- **[FIXED]** Health `nextRunAt` is not an actual timestamp. Now computed as ISO 8601 via cron-parser. *Fixed in 9907bea.*
 
 ### Testing gaps
 - Tests are mostly unit/spec-like and do not exercise `PayoutProcessor.runPayoutCycle()` end-to-end with mocked contract outcomes.
@@ -144,7 +144,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 - None.
 
 ### High
-- Session token is wallet address in connect flow, mirroring backend weakness (`site/index.html:253` equivalent in JS flow), so frontend participates in insecure session model.
+- **[FIXED]** ~~Session token is wallet address in connect flow.~~ Backend now returns opaque tokens; frontend uses them accordingly. *Fixed in 09e7e63.*
   - Category: Security architecture.
 
 ### Medium
@@ -170,11 +170,11 @@ Method: deep source read of all files in-scope (not just listings), plus targete
   - Category: Consistency/logic.
 
 ### Medium
-- Dev proxy missing `/subscription` and `/payout`, but app calls those endpoints (`site-app/vite.config.js:10`, `site-app/src/VPNConnect.jsx:143`, `site-app/src/SessionDashboard.jsx:121`). Local development flow breaks.
+- **[FIXED]** Dev proxy missing `/subscription` and `/payout`. Both routes now added to `vite.config.js`. *Fixed in 09e7e63.*
   - Category: Config/deployment.
-- Dashboard expects `session.nodeOperator`, but `VPNConnect` never stores it (`site-app/src/SessionDashboard.jsx:66`, `site-app/src/VPNConnect.jsx:279`). Payout status panel is effectively dead code.
+- **[FIXED]** Dashboard expects `session.nodeOperator`, but `VPNConnect` never stores it. `nodeOperator` now resolved and passed to session. *Fixed in 09e7e63.*
   - Category: Logic/dead code.
-- Uses `Number(...)` on wei strings for ETH formatting, causing precision loss (`site-app/src/SessionDashboard.jsx:225`).
+- **[FIXED]** Uses `Number(...)` on wei strings for ETH formatting, causing precision loss. Now uses `formatEther(BigInt(...))`. *Fixed in 09e7e63.*
   - Category: Logic correctness.
 
 ### Low
@@ -192,13 +192,13 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 ## node/
 
 ### High
-- Sensitive private keys are passed as process args (`--session-key`, `--heartbeat-key`), exposing them via process listings and some runtime telemetry (`node/entrypoint.sh:95`, `node/entrypoint.sh:103`).
+- **[FIXED]** Sensitive private keys are passed as process args (`--session-key`, `--heartbeat-key`). Now read from environment/files instead. *Fixed in db37046.*
   - Category: Security.
 
 ### Medium
-- No shutdown trap to run `wg-quick down` and clean iptables on container stop; network rules can be left dirty.
+- **[FIXED]** No shutdown trap to run `wg-quick down` and clean iptables on container stop. Trap added for SIGTERM/SIGINT. *Fixed in 91e71f1.*
   - Category: Config/ops reliability.
-- Entry point hardcodes assumptions like `eth0` in iptables NAT rule (`node/entrypoint.sh` generated config), fragile across hosts.
+- **[FIXED]** Entry point hardcodes `eth0` in iptables NAT rule. Now auto-detects default interface via `ip route`, with `NAT_INTERFACE` override. *Fixed in 91e71f1.*
 
 ### Low
 - `.env.example` and docs lag optional flags present in entrypoint (e.g. `SUBSCRIPTION_MANAGER`, `ZK_API_URL`) causing operator confusion.
@@ -211,7 +211,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 ## deploy/
 
 ### High
-- Setup instructions are stale/inconsistent with current gateway flags: uses `--policy-contract` in sample command (`deploy/setup-node.sh:99`), while modern node flow emphasizes `--direct-mode` mainnet checks.
+- **[FIXED]** Setup instructions are stale/inconsistent: used `--policy-contract` in sample command. Updated to `--direct-mode` workflow. *Fixed in 91e71f1.*
   - Category: Documentation/config.
 
 ### Medium
@@ -240,7 +240,7 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 ## integration/
 
 ### Medium
-- E2E tests explicitly allow `/vpn/connect` failure and return early (`integration/e2e_test.go:232`, `integration/e2e_test.go:240`), so key network provisioning behavior is not truly validated.
+- **[FIXED]** E2E tests explicitly allow `/vpn/connect` failure and return early. Now fail hard on 401/403 and assert connected status. *Fixed in 9907bea.*
   - Category: Testing gap.
 - Live Sepolia addresses are hardcoded; long-term drift risk when contracts are redeployed.
   - Category: Config consistency.
@@ -253,10 +253,10 @@ Method: deep source read of all files in-scope (not just listings), plus targete
 ## Cross-Component Consistency Findings
 
 ### High
-- Session/auth model mismatch: backend, CLI, and frontend all treat wallet address as bearer session token rather than opaque secret/JWT, creating a systemic auth weakness (`gateway/pkg/server/server.go:441`, `client/pkg/api/client.go`, `site-app/src/VPNConnect.jsx:253`, `site/index.html` connect flow).
+- **[FIXED]** ~~Session/auth model mismatch: all components treat wallet address as bearer session token.~~ Backend now issues HMAC-signed opaque tokens; CLI and frontend updated to use them. *Fixed across 0d52584, 8ea36fa, 09e7e63.*
 
 ### Medium
-- Rep-based node selection still appears in client/frontend, while gateway now returns card-eligibility fields instead of rep. This causes misleading UX and non-deterministic node selection policy.
+- **[PARTIAL]** Rep-based node selection still appears in client/frontend, while gateway now returns card-eligibility fields instead of rep. *Client fixed in 5f4c0e8; site-app `NodeSelector.jsx` may still reference rep.*
 
 ### Medium
 - Multiple duplicated implementations (WireGuard keygen in `site` and `site-app`) increase maintenance drift risk.
@@ -283,9 +283,9 @@ Recommend running in CI or a dev machine with toolchains installed:
 
 ## Prioritized Remediation Plan
 
-1. Replace wallet-address session tokens with opaque, signed, short-lived session IDs (or JWTs) and enforce ownership checks on `/vpn/connect` and `/vpn/disconnect`.
+1. ~~Replace wallet-address session tokens with opaque, signed, short-lived session IDs~~ — **Done** (HMAC opaque tokens, ownership checks on connect/disconnect).
 2. Fix payout processor accounting to track only successfully-withdrawn batches for shielding/private transfers.
-3. Tighten SIWE validation (chain ID, URI, issued-at/expiration) and strict address parsing (`common.IsHexAddress`).
-4. Remove private keys from process args in node runtime; use file descriptors/secrets mounts/env with minimal exposure.
-5. Remove/replace stale rep fields in client/site-app and align node selection with actual gateway schema.
+3. ~~Tighten SIWE validation and strict address parsing~~ — **Partial** (chain ID + `common.IsHexAddress` done; URI/expiry checks remain).
+4. ~~Remove private keys from process args in node runtime~~ — **Done** (env/file-based secrets).
+5. ~~Remove/replace stale rep fields in client/site-app~~ — **Done** (client uses card-eligibility fields).
 6. Add targeted tests for all high/critical paths listed above.

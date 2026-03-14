@@ -150,7 +150,13 @@ func (c *Client) Disconnect(sessionToken, publicKey string) error {
 
 // Status checks the VPN connection status.
 func (c *Client) Status(sessionToken string) (*StatusResponse, error) {
-	resp, err := c.httpClient.Get(c.baseURL + "/vpn/status?session_token=" + sessionToken)
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/vpn/status", nil)
+	if err != nil {
+		return nil, fmt.Errorf("building status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("status request: %w", err)
 	}

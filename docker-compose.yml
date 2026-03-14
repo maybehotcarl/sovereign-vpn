@@ -24,6 +24,11 @@ services:
       - "--eth-ws=${ETH_WS_URL:-}"
       - "--delegation"
       - "--subscription-manager=${SUBSCRIPTION_MANAGER:-}"
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "1"
     restart: unless-stopped
     networks:
       - vpn
@@ -47,6 +52,11 @@ services:
       - "3001:3001"
     volumes:
       - payout-data:/app/data
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "1"
     restart: unless-stopped
     networks:
       - vpn

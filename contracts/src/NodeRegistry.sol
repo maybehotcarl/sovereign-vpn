@@ -194,6 +194,9 @@ contract NodeRegistry is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Unregister and withdraw remaining stake.
+    /// @dev TODO(prod-harden): If msg.sender is a contract without receive/fallback, the ETH
+    ///      refund reverts and the operator is permanently stuck. Consider a pull-based withdrawal
+    ///      pattern or an owner escape hatch for stuck funds.
     function unregister() external nonReentrant {
         if (!isRegistered[msg.sender]) revert NotRegistered();
 

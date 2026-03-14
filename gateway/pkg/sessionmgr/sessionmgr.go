@@ -196,7 +196,7 @@ func (m *Manager) CloseSessionFor(user common.Address) {
 		ctx := context.Background()
 		sessionID, err := m.GetActiveSessionID(ctx, user)
 		if err != nil {
-			log.Printf("[sessionmgr] Error getting active session for %s: %v", user.Hex(), err)
+			log.Printf("[sessionmgr] Error getting active session: %v", err)
 			return
 		}
 		if sessionID == 0 {

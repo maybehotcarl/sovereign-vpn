@@ -178,7 +178,7 @@ func (c *Checker) FindVaults(ctx context.Context, hotWallet common.Address) ([]c
 	if c.enable6529 {
 		vaults, err := c.find6529Vaults(ctx, hotWallet)
 		if err != nil {
-			log.Printf("[delegation] 6529 registry check failed for %s: %v", hotWallet.Hex(), err)
+			log.Printf("[delegation] 6529 registry check failed: %v", err)
 		} else {
 			allVaults = append(allVaults, vaults...)
 		}
@@ -187,7 +187,7 @@ func (c *Checker) FindVaults(ctx context.Context, hotWallet common.Address) ([]c
 	if c.enableDXYZ {
 		vaults, err := c.findDelegateXYZVaults(ctx, hotWallet)
 		if err != nil {
-			log.Printf("[delegation] delegate.xyz check failed for %s: %v", hotWallet.Hex(), err)
+			log.Printf("[delegation] delegate.xyz check failed: %v", err)
 		} else {
 			allVaults = append(allVaults, vaults...)
 		}

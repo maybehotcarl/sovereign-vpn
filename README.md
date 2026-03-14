@@ -67,7 +67,7 @@ Sovereign VPN is a decentralized VPN where:
 │  POST /auth/verify     → NFT check → session     │
 │  POST /vpn/connect     → WireGuard peer config   │
 │  POST /vpn/disconnect  → peer removal            │
-│  GET  /vpn/status      → session info            │
+│  GET  /vpn/status      → session info (Bearer)   │
 │  GET  /nodes           → node discovery           │
 │  GET  /health          → gateway status           │
 │                                                  │
@@ -223,6 +223,12 @@ Operator earnings are private by default. Instead of withdrawing ETH to a public
 **Privacy trade-off:** Operators receive ~99.25–99.5% of earnings (RAILGUN shielding fee ~0.25%, relayer ~0.25%) in exchange for complete payment privacy.
 
 The system is backward-compatible — if no vault is configured, operator earnings accumulate as withdrawable balances (legacy behavior). The payout service defaults to `DRY_RUN=true` for safe initial deployment.
+
+## Privacy And Logging
+
+Raw operational logs should not persist for more than `1 hour`, and they should never include source IPs, session tokens, full user wallet addresses, assigned client tunnel IPs, or traffic metadata. The codebase now redacts sensitive gateway runtime logs, but retention is still enforced by deployment infrastructure.
+
+See [PRIVACY.md](PRIVACY.md) for the logging policy and deployment requirements. This project should be described as using minimal, short-lived off-chain logs, not as a literal "no logs" VPN.
 
 ## How to Contribute
 

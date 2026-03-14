@@ -38,10 +38,10 @@ cd integration && go test ./...
 
 ## Known Issues
 
-See `REVIEW.md` for a comprehensive code review with prioritized findings. Critical items:
-1. Gateway session auth uses wallet address as bearer token (auth bypass)
+See `REVIEW.md` for a comprehensive code review with prioritized findings. Remaining critical items:
+1. ~~Gateway session auth uses wallet address as bearer token~~ — **Fixed**: sessions now use HMAC-signed opaque tokens
 2. Payout processor accounting bug across failed batches
-3. SIWE validation is incomplete (missing chain ID, URI, expiry checks)
+3. SIWE validation is incomplete (missing URI, expiry checks; chain ID now enforced)
 
 ## Conventions
 

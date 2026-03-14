@@ -53,13 +53,13 @@ type DelegationFinder interface {
 
 // Checker queries the AccessPolicy contract to determine a wallet's VPN access tier.
 type Checker struct {
-	client       *ethclient.Client
-	policyAddr   common.Address
-	policyABI    abi.ABI
-	cacheTTL     time.Duration
-	delegation   DelegationFinder // optional, nil if delegation not configured
-	mu           sync.RWMutex
-	cache        map[common.Address]cacheEntry
+	client     *ethclient.Client
+	policyAddr common.Address
+	policyABI  abi.ABI
+	cacheTTL   time.Duration
+	delegation DelegationFinder // optional, nil if delegation not configured
+	mu         sync.RWMutex
+	cache      map[common.Address]cacheEntry
 }
 
 // AccessPolicy.checkAccess(address) returns (bool access, bool free)
@@ -126,18 +126,17 @@ func (c *Checker) Check(ctx context.Context, wallet common.Address) (CheckResult
 	if tier == TierDenied && c.delegation != nil {
 		vaults, err := c.delegation.FindVaults(ctx, wallet)
 		if err != nil {
-			log.Printf("[nftcheck] delegation lookup failed for %s: %v", wallet.Hex(), err)
+			log.Printf("[nftcheck] delegation lookup failed: %v", err)
 		}
 		for _, vault := range vaults {
 			vaultTier, err := c.checkOnChain(ctx, vault)
 			if err != nil {
-				log.Printf("[nftcheck] vault check failed for %s: %v", vault.Hex(), err)
+				log.Printf("[nftcheck] delegated vault check failed: %v", err)
 				continue
 			}
 			if vaultTier > tier {
 				tier = vaultTier
-				log.Printf("[nftcheck] delegation: %s delegates from %s (tier=%s)",
-					wallet.Hex(), vault.Hex(), tier)
+				log.Printf("[nftcheck] delegated access elevated tier=%s", tier)
 			}
 			if tier == TierFree {
 				break // best possible tier
@@ -239,4 +238,3 @@ func (c *Checker) cleanup() {
 		c.mu.Unlock()
 	}
 }
-

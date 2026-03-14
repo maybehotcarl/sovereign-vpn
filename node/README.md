@@ -92,3 +92,11 @@ docker compose up -d --build
 ```bash
 docker compose logs -f
 ```
+
+Treat this as live troubleshooting output only.
+
+- Raw operational logs must be purged within `1 hour`.
+- Do not enable Caddy access logs unless they are redacted and TTL-deleted within `1 hour`.
+- Docker log rotation reduces disk persistence but does not guarantee time-based deletion. To meet the policy, use a log pipeline with TTL-based deletion or disable persistent raw container logs entirely.
+
+See [PRIVACY.md](../PRIVACY.md) for the full policy.

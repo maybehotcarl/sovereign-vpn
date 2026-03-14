@@ -11,11 +11,11 @@
 package nftgate
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,10 +40,10 @@ type Session struct {
 
 // Gate holds the NFT verification state and session store.
 type Gate struct {
-	checker     nftcheck.AccessChecker
-	credTTL     time.Duration
-	sessions    *SessionStore
-	signingKey  [32]byte
+	checker    nftcheck.AccessChecker
+	credTTL    time.Duration
+	sessions   *SessionStore
+	signingKey [32]byte
 }
 
 // NewGate creates a new NFT gate.
@@ -77,7 +77,7 @@ func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *S
 	expiresAt := now.Add(g.credTTL)
 	id, token, err := g.newSessionToken(expiresAt)
 	if err != nil {
-		log.Printf("[nftgate] Failed to issue session token for %s: %v", wallet.Hex(), err)
+		log.Printf("[nftgate] Failed to issue session token: %v", err)
 		return nil
 	}
 
@@ -90,8 +90,8 @@ func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *S
 		ExpiresAt: expiresAt,
 	}
 	g.sessions.Set(session)
-	log.Printf("[nftgate] Session created: %s tier=%s expires=%s",
-		wallet.Hex(), tier, session.ExpiresAt.Format(time.RFC3339))
+	log.Printf("[nftgate] Session created: tier=%s expires=%s",
+		tier, session.ExpiresAt.Format(time.RFC3339))
 	return session
 }
 
@@ -130,7 +130,7 @@ func (g *Gate) GetSessionByToken(token string) *Session {
 // RevokeSession removes a session (used when NFT transfer is detected).
 func (g *Gate) RevokeSession(wallet common.Address) {
 	g.sessions.DeleteByAddress(wallet)
-	log.Printf("[nftgate] Session revoked: %s", wallet.Hex())
+	log.Printf("[nftgate] Session revoked")
 }
 
 // InvalidateCache removes cached NFT check results for a wallet.

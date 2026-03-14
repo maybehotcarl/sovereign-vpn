@@ -117,9 +117,11 @@ func TestDisconnect(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("session_token")
-		if token == "" {
-			t.Error("expected session_token param")
+		if r.URL.RawQuery != "" {
+			t.Errorf("expected no query string, got %q", r.URL.RawQuery)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer 0xABC" {
+			t.Errorf("expected Authorization header, got %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(StatusResponse{

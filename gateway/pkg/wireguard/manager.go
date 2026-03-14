@@ -21,10 +21,10 @@ import (
 // PeerConfig is the WireGuard configuration returned to the client.
 type PeerConfig struct {
 	ServerPublicKey string `json:"server_public_key"`
-	ServerEndpoint  string `json:"server_endpoint"`  // e.g. "1.2.3.4:51820"
-	ClientAddress   string `json:"client_address"`   // e.g. "10.8.0.2/24"
-	DNS             string `json:"dns"`              // e.g. "1.1.1.1"
-	AllowedIPs      string `json:"allowed_ips"`      // e.g. "0.0.0.0/0, ::/0"
+	ServerEndpoint  string `json:"server_endpoint"` // e.g. "1.2.3.4:51820"
+	ClientAddress   string `json:"client_address"`  // e.g. "10.8.0.2/24"
+	DNS             string `json:"dns"`             // e.g. "1.1.1.1"
+	AllowedIPs      string `json:"allowed_ips"`     // e.g. "0.0.0.0/0, ::/0"
 }
 
 // Peer tracks an active WireGuard peer.
@@ -48,9 +48,9 @@ type Config struct {
 
 // Manager handles WireGuard peer lifecycle.
 type Manager struct {
-	cfg   Config
-	mu    sync.Mutex
-	peers map[string]*Peer // keyed by client public key
+	cfg    Config
+	mu     sync.Mutex
+	peers  map[string]*Peer // keyed by client public key
 	ipPool *ipPool
 }
 
@@ -93,8 +93,8 @@ func (m *Manager) AddPeer(clientPubKey string, ttl time.Duration) (*PeerConfig, 
 		ExpiresAt:  now.Add(ttl),
 	}
 
-	log.Printf("[wireguard] Peer added: %s -> %s (expires %s)",
-		truncateKey(clientPubKey), clientIP, now.Add(ttl).Format(time.RFC3339))
+	log.Printf("[wireguard] Peer added (expires %s)",
+		now.Add(ttl).Format(time.RFC3339))
 
 	return &PeerConfig{
 		ServerPublicKey: m.cfg.ServerPublicKey,
@@ -122,7 +122,7 @@ func (m *Manager) RemovePeer(clientPubKey string) error {
 	m.ipPool.Release(peer.ClientIP)
 	delete(m.peers, clientPubKey)
 
-	log.Printf("[wireguard] Peer removed: %s", truncateKey(clientPubKey))
+	log.Printf("[wireguard] Peer removed")
 	return nil
 }
 
@@ -139,7 +139,7 @@ func (m *Manager) CleanExpired() int {
 			m.ipPool.Release(peer.ClientIP)
 			delete(m.peers, pubKey)
 			removed++
-			log.Printf("[wireguard] Expired peer removed: %s", truncateKey(pubKey))
+			log.Printf("[wireguard] Expired peer removed")
 		}
 	}
 	return removed

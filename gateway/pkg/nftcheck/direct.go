@@ -19,13 +19,13 @@ import (
 // without needing a deployed AccessPolicy contract. This is the preferred
 // mode for mainnet where we check against the real Memes contract.
 type DirectChecker struct {
-	client      *ethclient.Client
-	memesAddr   common.Address
-	erc1155ABI  abi.ABI
-	thisCardID  int64    // token ID that grants free tier
-	maxTokenID  int64    // highest token ID to check
-	cacheTTL    time.Duration
-	delegation  DelegationFinder
+	client     *ethclient.Client
+	memesAddr  common.Address
+	erc1155ABI abi.ABI
+	thisCardID int64 // token ID that grants free tier
+	maxTokenID int64 // highest token ID to check
+	cacheTTL   time.Duration
+	delegation DelegationFinder
 
 	mu    sync.RWMutex
 	cache map[common.Address]cacheEntry
@@ -98,18 +98,17 @@ func (c *DirectChecker) Check(ctx context.Context, wallet common.Address) (Check
 	if tier == TierDenied && c.delegation != nil {
 		vaults, err := c.delegation.FindVaults(ctx, wallet)
 		if err != nil {
-			log.Printf("[nftcheck-direct] delegation lookup failed for %s: %v", wallet.Hex(), err)
+			log.Printf("[nftcheck-direct] delegation lookup failed: %v", err)
 		}
 		for _, vault := range vaults {
 			vaultTier, err := c.checkDirect(ctx, vault)
 			if err != nil {
-				log.Printf("[nftcheck-direct] vault check failed for %s: %v", vault.Hex(), err)
+				log.Printf("[nftcheck-direct] delegated vault check failed: %v", err)
 				continue
 			}
 			if vaultTier > tier {
 				tier = vaultTier
-				log.Printf("[nftcheck-direct] delegation: %s delegates from %s (tier=%s)",
-					wallet.Hex(), vault.Hex(), tier)
+				log.Printf("[nftcheck-direct] delegated access elevated tier=%s", tier)
 			}
 			if tier == TierFree {
 				break

@@ -15,8 +15,8 @@ func TestParseAddress(t *testing.T) {
 	}{
 		{"0x1234567890abcdef1234567890abcdef12345678", "1234567890abcdef1234567890abcdef12345678"},
 		{"0xABCDEF1234567890ABCDEF1234567890ABCDEF12", "abcdef1234567890abcdef1234567890abcdef12"},
-		{"short", "0000000000000000000000000000000000000000"},      // invalid length -> zero
-		{"0xshort", "0000000000000000000000000000000000000000"},    // invalid length after 0x
+		{"short", "0000000000000000000000000000000000000000"},                                      // invalid length -> zero
+		{"0xshort", "0000000000000000000000000000000000000000"},                                    // invalid length after 0x
 		{"0x1234567890abcdef1234567890abcdef1234567g", "0000000000000000000000000000000000000000"}, // invalid hex char
 	}
 
@@ -116,5 +116,35 @@ func TestConnectRequestValidation(t *testing.T) {
 	}
 	if req.PublicKey != "abc123" {
 		t.Errorf("expected abc123, got %s", req.PublicKey)
+	}
+}
+
+func TestBearerToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/vpn/status", nil)
+	req.Header.Set("Authorization", "Bearer tok_abc123def456")
+
+	if got := bearerToken(req); got != "tok_abc123def456" {
+		t.Fatalf("bearerToken() = %q, want tok_abc123def456", got)
+	}
+}
+
+func TestBearerTokenRejectsMalformedHeader(t *testing.T) {
+	tests := []string{
+		"",
+		"Bearer",
+		"Basic tok_abc123def456",
+		"tok_abc123def456",
+		"Bearer tok_abc123def456 extra",
+	}
+
+	for _, header := range tests {
+		req := httptest.NewRequest(http.MethodGet, "/vpn/status", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+
+		if got := bearerToken(req); got != "" {
+			t.Fatalf("bearerToken(%q) = %q, want empty", header, got)
+		}
 	}
 }

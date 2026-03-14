@@ -1,4 +1,6 @@
 6529vpn.io {
+	# Access logs are intentionally not enabled here. If you add them later,
+	# they must be redacted and purged within 1 hour.
 	# API routes — reverse proxy to gateway container
 	handle /auth/* {
 		reverse_proxy localhost:8080
