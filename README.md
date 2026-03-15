@@ -230,6 +230,8 @@ Raw operational logs should not persist for more than `1 hour`, and they should 
 
 See [PRIVACY.md](PRIVACY.md) for the logging policy and deployment requirements. This project should be described as using minimal, short-lived off-chain logs, not as a literal "no logs" VPN.
 
+If protecting user wallet identity on the connect path is a hard requirement, see [ANONYMOUS_ACCESS_PROTOCOL.md](ANONYMOUS_ACCESS_PROTOCOL.md) for the target architecture that replaces SIWE-based user admission.
+
 ## How to Contribute
 
 | Role | What You'd Work On |

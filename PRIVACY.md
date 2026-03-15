@@ -39,4 +39,8 @@ The app code redacts sensitive runtime logs, but log retention is ultimately an 
 - The access gateway still sees wallet addresses during authentication.
 - On-chain session metadata is public when session contracts are used.
 
+## Target Architecture
+
+The current implementation is not the final privacy architecture. The target anonymous admission design is documented in [ANONYMOUS_ACCESS_PROTOCOL.md](ANONYMOUS_ACCESS_PROTOCOL.md).
+
 This project should be described as using minimal, short-lived off-chain logs, not as a literal "no logs" VPN.
