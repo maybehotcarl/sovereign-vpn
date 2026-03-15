@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/noderegistry"
@@ -29,6 +30,7 @@ import (
 // Server is the Sovereign VPN gateway.
 type Server struct {
 	cfg         *config.Config
+	anonAuth    *anonauth.Service
 	siwe        *siwe.Service
 	checker     nftcheck.AccessChecker
 	gate        *nftgate.Gate
@@ -41,7 +43,7 @@ type Server struct {
 	payoutVault *payoutvault.Client
 	thisCardID  int64
 	peerMu      sync.RWMutex
-	peerOwners  map[string]common.Address
+	peerOwners  map[string]string
 	mux         *http.ServeMux
 	corsOrigin  string
 	limiter     *ratelimit.Limiter
@@ -58,11 +60,12 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 
 	s := &Server{
 		cfg:        cfg,
+		anonAuth:   anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1),
 		siwe:       siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
 		checker:    checker,
 		gate:       gate,
 		wg:         wg,
-		peerOwners: make(map[string]common.Address),
+		peerOwners: make(map[string]string),
 		mux:        http.NewServeMux(),
 		limiter:    limiter,
 	}
@@ -70,10 +73,12 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	// Public endpoints (no session required)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /auth/challenge", s.handleChallenge)
+	s.mux.HandleFunc("POST /auth/anonymous/challenge", s.handleAnonymousChallenge)
 	s.mux.HandleFunc("POST /auth/verify", s.handleVerify)
 
 	// VPN endpoints (session required via NFT gate)
 	s.mux.HandleFunc("POST /vpn/connect", s.handleVPNConnect)
+	s.mux.HandleFunc("POST /vpn/anonymous/connect", s.handleAnonymousVPNConnect)
 	s.mux.HandleFunc("POST /vpn/disconnect", s.handleVPNDisconnect)
 	s.mux.HandleFunc("GET /vpn/status", s.handleVPNStatus)
 
@@ -155,7 +160,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 
 		if r.Method == http.MethodOptions {
@@ -200,6 +205,15 @@ type ChallengeResponse struct {
 	Nonce   string `json:"nonce"`
 }
 
+// AnonymousChallengeResponse is returned by POST /auth/anonymous/challenge.
+type AnonymousChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	Nonce       string    `json:"nonce"`
+	PolicyEpoch uint64    `json:"policy_epoch"`
+	ProofType   string    `json:"proof_type"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
 // POST /auth/challenge
 // Request: { "address": "0x..." }
 // Response: { "message": "...", "nonce": "..." }
@@ -228,6 +242,25 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ChallengeResponse{
 		Message: message,
 		Nonce:   challenge.Nonce,
+	})
+}
+
+// POST /auth/anonymous/challenge
+// Response: { "challenge_id": "...", "nonce": "...", "policy_epoch": 1, "proof_type": "vpn_access_v1", "expires_at": "..." }
+func (s *Server) handleAnonymousChallenge(w http.ResponseWriter, r *http.Request) {
+	challenge, err := s.anonAuth.NewChallenge()
+	if err != nil {
+		log.Printf("Error generating anonymous challenge: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to generate anonymous challenge")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AnonymousChallengeResponse{
+		ChallengeID: challenge.ID,
+		Nonce:       challenge.Nonce,
+		PolicyEpoch: challenge.PolicyEpoch,
+		ProofType:   challenge.ProofType,
+		ExpiresAt:   challenge.ExpiresAt,
 	})
 }
 
@@ -431,6 +464,17 @@ type ConnectRequest struct {
 	PublicKey    string `json:"public_key"`    // Client's WireGuard public key
 }
 
+// AnonymousConnectRequest is the body for POST /vpn/anonymous/connect.
+type AnonymousConnectRequest struct {
+	ChallengeID    string   `json:"challenge_id"`
+	ProofType      string   `json:"proof_type"`
+	Proof          any      `json:"proof"`
+	PublicSignals  []string `json:"public_signals"`
+	NullifierHash  string   `json:"nullifier_hash"`
+	SessionKeyHash string   `json:"session_key_hash"`
+	PublicKey      string   `json:"public_key"`
+}
+
 // ConnectResponse is returned by POST /vpn/connect.
 type ConnectResponse struct {
 	ServerPublicKey string `json:"server_public_key"`
@@ -459,10 +503,10 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	// Validate session
 	session := s.gate.GetSessionByToken(req.SessionToken)
 	if session == nil {
-		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate via /auth/verify")
+		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
 		return
 	}
-	if !s.claimsPeer(req.PublicKey, session.Address) {
+	if !s.claimsPeer(req.PublicKey, session.ID) {
 		writeError(w, http.StatusForbidden, "public key is already bound to another session")
 		return
 	}
@@ -486,7 +530,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				expiresAt := time.Now().Add(remaining)
-				s.setPeerOwner(req.PublicKey, session.Address)
+				s.setPeerOwner(req.PublicKey, session.ID)
 				log.Printf("VPN connected (subscription): remaining=%s", remaining)
 				writeJSON(w, http.StatusOK, ConnectResponse{
 					ServerPublicKey: peerCfg.ServerPublicKey,
@@ -514,7 +558,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
-					s.setPeerOwner(req.PublicKey, session.Address)
+					s.setPeerOwner(req.PublicKey, session.ID)
 					log.Printf("VPN connected (paid): duration=%ds", onChain.Duration)
 					writeJSON(w, http.StatusOK, ConnectResponse{
 						ServerPublicKey: peerCfg.ServerPublicKey,
@@ -543,7 +587,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("VPN connected: tier=%s", session.Tier)
-	s.setPeerOwner(req.PublicKey, session.Address)
+	s.setPeerOwner(req.PublicKey, session.ID)
 
 	writeJSON(w, http.StatusOK, ConnectResponse{
 		ServerPublicKey: peerCfg.ServerPublicKey,
@@ -553,6 +597,99 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 		AllowedIPs:      peerCfg.AllowedIPs,
 		ExpiresAt:       session.ExpiresAt.UTC().Format(time.RFC3339),
 		Tier:            session.Tier.String(),
+	})
+}
+
+// POST /vpn/anonymous/connect -- provision a WireGuard peer for an anonymous authenticated session.
+func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Request) {
+	var req AnonymousConnectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ChallengeID == "" || req.ProofType == "" || req.NullifierHash == "" || req.SessionKeyHash == "" || req.PublicKey == "" {
+		writeError(w, http.StatusBadRequest, "challenge_id, proof_type, nullifier_hash, session_key_hash, and public_key are required")
+		return
+	}
+
+	challenge := s.anonAuth.GetChallenge(req.ChallengeID)
+	if challenge == nil {
+		writeError(w, http.StatusUnauthorized, "challenge expired or not found")
+		return
+	}
+	if req.ProofType != challenge.ProofType {
+		writeError(w, http.StatusBadRequest, "proof_type does not match challenge")
+		return
+	}
+	if s.zkClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "anonymous verifier not configured")
+		return
+	}
+
+	zkResult, err := s.zkClient.VerifyProof(r.Context(), zkverify.ProofPayload{
+		ProofType:     req.ProofType,
+		Proof:         req.Proof,
+		PublicSignals: req.PublicSignals,
+	})
+	if err != nil {
+		log.Printf("Anonymous ZK API error during proof verification: %v", err)
+		writeError(w, http.StatusBadGateway, "ZK verification service unavailable")
+		return
+	}
+	if !zkResult.Valid {
+		log.Printf("Anonymous ZK proof invalid: type=%s reason=%s", req.ProofType, zkResult.Reason)
+		writeError(w, http.StatusForbidden, "anonymous proof invalid")
+		return
+	}
+
+	tier := s.tierFromZKProof(&zkProofPayload{
+		ProofType:     req.ProofType,
+		Proof:         req.Proof,
+		PublicSignals: req.PublicSignals,
+	})
+	if tier != nftcheck.TierFree {
+		writeError(w, http.StatusNotImplemented, "anonymous paid tier not implemented")
+		return
+	}
+	if !s.anonAuth.ConsumeNullifier(req.NullifierHash, s.cfg.CredentialTTL) {
+		writeError(w, http.StatusConflict, "nullifier already used")
+		return
+	}
+
+	session := s.gate.CreateAnonymousSession(nftgate.AnonymousSessionParams{
+		Tier:           tier,
+		PolicyEpoch:    challenge.PolicyEpoch,
+		NullifierHash:  req.NullifierHash,
+		SessionKeyHash: req.SessionKeyHash,
+	})
+	if session == nil {
+		s.anonAuth.ReleaseNullifier(req.NullifierHash)
+		writeError(w, http.StatusInternalServerError, "failed to create anonymous session")
+		return
+	}
+
+	peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Until(session.ExpiresAt))
+	if err != nil {
+		s.gate.DeleteSessionByID(session.ID)
+		s.anonAuth.ReleaseNullifier(req.NullifierHash)
+		log.Printf("Error adding anonymous WireGuard peer: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
+		return
+	}
+
+	s.anonAuth.DeleteChallenge(req.ChallengeID)
+	s.setPeerOwner(req.PublicKey, session.ID)
+	log.Printf("VPN connected: anonymous tier=%s epoch=%d", session.Tier, session.PolicyEpoch)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_token":     session.Token,
+		"server_public_key": peerCfg.ServerPublicKey,
+		"server_endpoint":   peerCfg.ServerEndpoint,
+		"client_address":    peerCfg.ClientAddress,
+		"dns":               peerCfg.DNS,
+		"allowed_ips":       peerCfg.AllowedIPs,
+		"expires_at":        session.ExpiresAt.UTC().Format(time.RFC3339),
+		"tier":              session.Tier.String(),
 	})
 }
 
@@ -571,10 +708,10 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	session := s.gate.GetSessionByToken(req.SessionToken)
 	if session == nil {
-		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate via /auth/verify")
+		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
 		return
 	}
-	if !s.peerOwnedBy(req.PublicKey, session.Address) {
+	if !s.peerOwnedBy(req.PublicKey, session.ID) {
 		writeError(w, http.StatusForbidden, "public key is not owned by this session")
 		return
 	}
@@ -587,6 +724,11 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	// Close on-chain session (fire-and-forget) — skip for subscribers
 	// (subscription stays valid; user can reconnect freely)
+	if !session.AddressBound {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
+		return
+	}
+
 	addr := session.Address
 	isSubscriber := false
 	if s.subMgr != nil {
@@ -813,26 +955,26 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-func (s *Server) claimsPeer(pubKey string, owner common.Address) bool {
+func (s *Server) claimsPeer(pubKey string, ownerID string) bool {
 	s.peerMu.Lock()
 	defer s.peerMu.Unlock()
-	if existing, ok := s.peerOwners[pubKey]; ok && existing != owner {
+	if existing, ok := s.peerOwners[pubKey]; ok && existing != ownerID {
 		return false
 	}
 	return true
 }
 
-func (s *Server) setPeerOwner(pubKey string, owner common.Address) {
+func (s *Server) setPeerOwner(pubKey string, ownerID string) {
 	s.peerMu.Lock()
-	s.peerOwners[pubKey] = owner
+	s.peerOwners[pubKey] = ownerID
 	s.peerMu.Unlock()
 }
 
-func (s *Server) peerOwnedBy(pubKey string, owner common.Address) bool {
+func (s *Server) peerOwnedBy(pubKey string, ownerID string) bool {
 	s.peerMu.RLock()
 	defer s.peerMu.RUnlock()
 	existing, ok := s.peerOwners[pubKey]
-	return ok && existing == owner
+	return ok && existing == ownerID
 }
 
 func (s *Server) deletePeerOwner(pubKey string) {

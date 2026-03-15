@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
 )
 
 func TestParseAddress(t *testing.T) {
@@ -146,5 +149,73 @@ func TestBearerTokenRejectsMalformedHeader(t *testing.T) {
 		if got := bearerToken(req); got != "" {
 			t.Fatalf("bearerToken(%q) = %q, want empty", header, got)
 		}
+	}
+}
+
+func TestHandleAnonymousChallenge(t *testing.T) {
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, "vpn_access_v1", 7),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/anonymous/challenge", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousChallenge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp AnonymousChallengeResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.ChallengeID == "" {
+		t.Fatal("expected challenge id")
+	}
+	if resp.Nonce == "" {
+		t.Fatal("expected nonce")
+	}
+	if resp.PolicyEpoch != 7 {
+		t.Fatalf("PolicyEpoch = %d, want 7", resp.PolicyEpoch)
+	}
+	if resp.ProofType != "vpn_access_v1" {
+		t.Fatalf("ProofType = %q, want vpn_access_v1", resp.ProofType)
+	}
+}
+
+func TestHandleAnonymousConnectMissingChallenge(t *testing.T) {
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, "vpn_access_v1", 7),
+	}
+	body := `{"challenge_id":"missing","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_key":"wg_pub"}` //nolint:lll
+	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousVPNConnect(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleAnonymousConnectRequiresVerifier(t *testing.T) {
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, "vpn_access_v1", 7),
+	}
+	challenge, err := s.anonAuth.NewChallenge()
+	if err != nil {
+		t.Fatalf("NewChallenge: %v", err)
+	}
+
+	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_key":"wg_pub"}` //nolint:lll
+	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousVPNConnect(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 }

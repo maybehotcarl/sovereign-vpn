@@ -104,6 +104,37 @@ func TestActiveSessionCount(t *testing.T) {
 	}
 }
 
+func TestCreateAnonymousSession(t *testing.T) {
+	g := testGate()
+
+	session := g.CreateAnonymousSession(AnonymousSessionParams{
+		Tier:           nftcheck.TierFree,
+		PolicyEpoch:    9,
+		NullifierHash:  "nul_abc",
+		SessionKeyHash: "sess_def",
+	})
+	if session == nil {
+		t.Fatal("expected anonymous session, got nil")
+	}
+	if session.AddressBound {
+		t.Fatal("expected anonymous session to be addressless")
+	}
+	if session.PolicyEpoch != 9 {
+		t.Fatalf("PolicyEpoch = %d, want 9", session.PolicyEpoch)
+	}
+	if session.NullifierHash != "nul_abc" {
+		t.Fatalf("NullifierHash = %q, want nul_abc", session.NullifierHash)
+	}
+
+	got := g.GetSessionByToken(session.Token)
+	if got == nil {
+		t.Fatal("expected anonymous session by token")
+	}
+	if got.AddressBound {
+		t.Fatal("expected stored anonymous session to remain addressless")
+	}
+}
+
 func TestHTTPMiddlewareAllowsGET(t *testing.T) {
 	g := testGate()
 

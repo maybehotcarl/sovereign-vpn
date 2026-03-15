@@ -28,11 +28,13 @@ func NewSessionStore() *SessionStore {
 // Set stores or updates a session.
 func (ss *SessionStore) Set(session *Session) {
 	ss.mu.Lock()
-	if oldID, ok := ss.addressToID[session.Address]; ok && oldID != session.ID {
-		delete(ss.sessions, oldID)
+	if session.AddressBound {
+		if oldID, ok := ss.addressToID[session.Address]; ok && oldID != session.ID {
+			delete(ss.sessions, oldID)
+		}
+		ss.addressToID[session.Address] = session.ID
 	}
 	ss.sessions[session.ID] = session
-	ss.addressToID[session.Address] = session.ID
 	ss.mu.Unlock()
 }
 
@@ -58,7 +60,7 @@ func (ss *SessionStore) GetByAddress(addr common.Address) *Session {
 func (ss *SessionStore) DeleteByID(id string) {
 	ss.mu.Lock()
 	session, ok := ss.sessions[id]
-	if ok {
+	if ok && session.AddressBound {
 		delete(ss.addressToID, session.Address)
 	}
 	delete(ss.sessions, id)
@@ -92,7 +94,9 @@ func (ss *SessionStore) cleanup() {
 		now := time.Now()
 		for id, session := range ss.sessions {
 			if now.After(session.ExpiresAt) {
-				delete(ss.addressToID, session.Address)
+				if session.AddressBound {
+					delete(ss.addressToID, session.Address)
+				}
 				delete(ss.sessions, id)
 			}
 		}

@@ -30,12 +30,16 @@ import (
 
 // Session represents an authenticated VPN session.
 type Session struct {
-	Address   common.Address
-	ID        string
-	Token     string
-	Tier      nftcheck.AccessTier
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	Address        common.Address
+	AddressBound   bool
+	NullifierHash  string
+	SessionKeyHash string
+	PolicyEpoch    uint64
+	ID             string
+	Token          string
+	Tier           nftcheck.AccessTier
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 }
 
 // Gate holds the NFT verification state and session store.
@@ -82,16 +86,52 @@ func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *S
 	}
 
 	session := &Session{
-		Address:   wallet,
-		ID:        id,
-		Token:     token,
-		Tier:      tier,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
+		Address:      wallet,
+		AddressBound: true,
+		ID:           id,
+		Token:        token,
+		Tier:         tier,
+		CreatedAt:    now,
+		ExpiresAt:    expiresAt,
 	}
 	g.sessions.Set(session)
 	log.Printf("[nftgate] Session created: tier=%s expires=%s",
 		tier, session.ExpiresAt.Format(time.RFC3339))
+	return session
+}
+
+// AnonymousSessionParams describes the metadata attached to an anonymous session.
+type AnonymousSessionParams struct {
+	Tier           nftcheck.AccessTier
+	PolicyEpoch    uint64
+	NullifierHash  string
+	SessionKeyHash string
+}
+
+// CreateAnonymousSession creates a new authenticated session without binding it to a wallet address.
+func (g *Gate) CreateAnonymousSession(params AnonymousSessionParams) *Session {
+	now := time.Now()
+	expiresAt := now.Add(g.credTTL)
+	id, token, err := g.newSessionToken(expiresAt)
+	if err != nil {
+		log.Printf("[nftgate] Failed to issue anonymous session token: %v", err)
+		return nil
+	}
+
+	session := &Session{
+		AddressBound:   false,
+		NullifierHash:  params.NullifierHash,
+		SessionKeyHash: params.SessionKeyHash,
+		PolicyEpoch:    params.PolicyEpoch,
+		ID:             id,
+		Token:          token,
+		Tier:           params.Tier,
+		CreatedAt:      now,
+		ExpiresAt:      expiresAt,
+	}
+	g.sessions.Set(session)
+	log.Printf("[nftgate] Anonymous session created: tier=%s expires=%s",
+		params.Tier, session.ExpiresAt.Format(time.RFC3339))
 	return session
 }
 
@@ -131,6 +171,12 @@ func (g *Gate) GetSessionByToken(token string) *Session {
 func (g *Gate) RevokeSession(wallet common.Address) {
 	g.sessions.DeleteByAddress(wallet)
 	log.Printf("[nftgate] Session revoked")
+}
+
+// DeleteSessionByID removes a session by opaque session ID.
+func (g *Gate) DeleteSessionByID(id string) {
+	g.sessions.DeleteByID(id)
+	log.Printf("[nftgate] Session deleted")
 }
 
 // InvalidateCache removes cached NFT check results for a wallet.
