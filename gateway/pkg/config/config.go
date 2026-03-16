@@ -22,11 +22,12 @@ type Config struct {
 	AccessPolicyContract string `json:"access_policy_contract"`
 
 	// SIWE settings
-	SIWEDomain        string        `json:"siwe_domain"`         // e.g. "sovereignvpn.network"
-	SIWEUri           string        `json:"siwe_uri"`            // e.g. "https://sovereignvpn.network"
-	ChallengeTTL      time.Duration `json:"challenge_ttl"`       // How long a challenge is valid
-	NonceLength       int           `json:"nonce_length"`        // Length of random nonce (min 8)
-	CredentialTTL     time.Duration `json:"credential_ttl"`      // WireGuard credential validity
+	SIWEDomain     string        `json:"siwe_domain"`      // e.g. "sovereignvpn.network"
+	SIWEUri        string        `json:"siwe_uri"`         // e.g. "https://sovereignvpn.network"
+	ChallengeTTL   time.Duration `json:"challenge_ttl"`    // How long a challenge is valid
+	NonceLength    int           `json:"nonce_length"`     // Length of random nonce (min 8)
+	CredentialTTL  time.Duration `json:"credential_ttl"`   // WireGuard credential validity
+	EnableFreeTier bool          `json:"enable_free_tier"` // Allow THIS-card holders to bypass payment
 
 	// Rate limiting
 	RateLimitPerMinute int `json:"rate_limit_per_minute"` // Per-IP rate limit
@@ -35,16 +36,17 @@ type Config struct {
 // DefaultConfig returns a config with sensible defaults for development.
 func DefaultConfig() *Config {
 	return &Config{
-		ListenAddr:         ":8080",
-		EthereumRPC:        "https://ethereum-rpc.publicnode.com",
-		MemesContract:      "",
+		ListenAddr:           ":8080",
+		EthereumRPC:          "https://ethereum-rpc.publicnode.com",
+		MemesContract:        "",
 		AccessPolicyContract: "",
-		SIWEDomain:         "6529vpn.io",
-		SIWEUri:            "https://6529vpn.io",
-		ChallengeTTL:       5 * time.Minute,
-		NonceLength:        16,
-		CredentialTTL:      24 * time.Hour,
-		RateLimitPerMinute: 30,
+		SIWEDomain:           "6529vpn.io",
+		SIWEUri:              "https://6529vpn.io",
+		ChallengeTTL:         5 * time.Minute,
+		NonceLength:          16,
+		CredentialTTL:        24 * time.Hour,
+		EnableFreeTier:       false,
+		RateLimitPerMinute:   30,
 	}
 }
 

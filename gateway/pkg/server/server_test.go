@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
 )
 
 func TestParseAddress(t *testing.T) {
@@ -217,5 +218,19 @@ func TestHandleAnonymousConnectRequiresVerifier(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestEffectiveTierDowngradesFreeWhenDisabled(t *testing.T) {
+	s := &Server{freeTier: false}
+	if got := s.effectiveTier(nftcheck.TierFree); got != nftcheck.TierPaid {
+		t.Fatalf("effectiveTier(free) = %s, want paid", got)
+	}
+}
+
+func TestEffectiveTierKeepsFreeWhenEnabled(t *testing.T) {
+	s := &Server{freeTier: true}
+	if got := s.effectiveTier(nftcheck.TierFree); got != nftcheck.TierFree {
+		t.Fatalf("effectiveTier(free) = %s, want free", got)
 	}
 }

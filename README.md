@@ -232,6 +232,8 @@ See [PRIVACY.md](PRIVACY.md) for the logging policy and deployment requirements.
 
 If protecting user wallet identity on the connect path is a hard requirement, see [ANONYMOUS_ACCESS_PROTOCOL.md](ANONYMOUS_ACCESS_PROTOCOL.md) for the target architecture that replaces SIWE-based user admission.
 
+For the paid-first anonymous launch variant, see [PAID_ANON_ACCESS_V1.md](PAID_ANON_ACCESS_V1.md).
+
 ## How to Contribute
 
 | Role | What You'd Work On |

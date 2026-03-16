@@ -100,20 +100,20 @@ export default function App() {
       </section>
 
       <section>
-        <h2>Access Tiers</h2>
+        <h2>Access</h2>
         <div className="steps">
-          <div className="step">
-            <div className="step-num" style={{ background: 'var(--success)' }}>F</div>
-            <div className="step-text">
-              <strong>Free Tier</strong>
-              <span>Hold the project's Memes card (THIS card) and use the VPN for free.</span>
-            </div>
-          </div>
           <div className="step">
             <div className="step-num" style={{ background: '#2196f3' }}>P</div>
             <div className="step-text">
-              <strong>Paid Tier</strong>
-              <span>Hold any other Memes card. Access for a small fee that supports node operators.</span>
+              <strong>Paid Access</strong>
+              <span>Hold a supported Memes card. Access is currently paid while pricing and incentives are tested.</span>
+            </div>
+          </div>
+          <div className="step">
+            <div className="step-num" style={{ background: 'var(--success)' }}>?</div>
+            <div className="step-text">
+              <strong>Future Sponsored Access</strong>
+              <span>The project's card may unlock sponsored access later, pending community feedback.</span>
             </div>
           </div>
         </div>

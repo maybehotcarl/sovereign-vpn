@@ -10,6 +10,8 @@ The current implementation still uses SIWE on the user path, which reveals the w
 
 Implementation work is tracked in [ANONYMOUS_ACCESS_BACKLOG.md](ANONYMOUS_ACCESS_BACKLOG.md).
 
+The paid-anonymous launch variant is specified separately in [PAID_ANON_ACCESS_V1.md](PAID_ANON_ACCESS_V1.md).
+
 ## Why This Exists
 
 The current access flow proves identity first and entitlement second:

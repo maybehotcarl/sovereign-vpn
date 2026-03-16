@@ -41,6 +41,7 @@ func main() {
 	// Direct mode (mainnet) — check Memes ERC-1155 directly without AccessPolicy
 	directMode := flag.Bool("direct-mode", false, "Check Memes ERC-1155 directly (no AccessPolicy contract needed)")
 	thisCardID := flag.Int64("this-card-id", 0, "Token ID for THIS card (free tier). 0 = no free tier")
+	enableFreeTier := flag.Bool("enable-free-tier", false, "Allow THIS-card holders to bypass payment")
 	maxTokenID := flag.Int64("max-token-id", 350, "Highest Memes token ID to check")
 
 	// WireGuard flags
@@ -127,6 +128,9 @@ func main() {
 	if *siweDomain != "" {
 		cfg.SIWEDomain = *siweDomain
 		cfg.SIWEUri = "https://" + *siweDomain
+	}
+	if *enableFreeTier {
+		cfg.EnableFreeTier = true
 	}
 
 	// In direct mode, AccessPolicy is not required
@@ -229,6 +233,7 @@ func main() {
 	// Create and start server
 	srv := server.New(cfg, checker, wgManager)
 	srv.SetChainID(*chainID)
+	log.Printf("Free tier enabled: %v", cfg.EnableFreeTier)
 
 	if *corsOrigin != "" {
 		srv.SetCORSOrigin(*corsOrigin)

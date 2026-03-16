@@ -31,6 +31,7 @@ import (
 type Server struct {
 	cfg         *config.Config
 	anonAuth    *anonauth.Service
+	freeTier    bool
 	siwe        *siwe.Service
 	checker     nftcheck.AccessChecker
 	gate        *nftgate.Gate
@@ -61,6 +62,7 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	s := &Server{
 		cfg:        cfg,
 		anonAuth:   anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1),
+		freeTier:   cfg.EnableFreeTier,
 		siwe:       siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
 		checker:    checker,
 		gate:       gate,
@@ -192,10 +194,11 @@ func (s *Server) ListenAndServe() error {
 // GET /health
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":          "ok",
-		"time":            time.Now().UTC(),
-		"active_sessions": s.gate.ActiveSessionCount(),
-		"active_peers":    s.wg.PeerCount(),
+		"status":            "ok",
+		"time":              time.Now().UTC(),
+		"active_sessions":   s.gate.ActiveSessionCount(),
+		"active_peers":      s.wg.PeerCount(),
+		"free_tier_enabled": s.freeTier,
 	})
 }
 
@@ -350,6 +353,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 3: Deny if no access
+	result.Tier = s.effectiveTier(result.Tier)
 	if result.Tier == nftcheck.TierDenied {
 		writeJSON(w, http.StatusForbidden, VerifyResponse{
 			Address: auth.Address.Hex(),
@@ -647,6 +651,7 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		Proof:         req.Proof,
 		PublicSignals: req.PublicSignals,
 	})
+	tier = s.effectiveTier(tier)
 	if tier != nftcheck.TierFree {
 		writeError(w, http.StatusNotImplemented, "anonymous paid tier not implemented")
 		return
@@ -953,6 +958,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func (s *Server) effectiveTier(tier nftcheck.AccessTier) nftcheck.AccessTier {
+	if tier == nftcheck.TierFree && !s.freeTier {
+		return nftcheck.TierPaid
+	}
+	return tier
 }
 
 func (s *Server) claimsPeer(pubKey string, ownerID string) bool {
