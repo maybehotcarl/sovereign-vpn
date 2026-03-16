@@ -210,11 +210,12 @@ type ChallengeResponse struct {
 
 // AnonymousChallengeResponse is returned by POST /auth/anonymous/challenge.
 type AnonymousChallengeResponse struct {
-	ChallengeID string    `json:"challenge_id"`
-	Nonce       string    `json:"nonce"`
-	PolicyEpoch uint64    `json:"policy_epoch"`
-	ProofType   string    `json:"proof_type"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ChallengeID   string    `json:"challenge_id"`
+	Nonce         string    `json:"nonce"`
+	ChallengeHash string    `json:"challenge_hash"`
+	PolicyEpoch   uint64    `json:"policy_epoch"`
+	ProofType     string    `json:"proof_type"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
 // POST /auth/challenge
@@ -259,11 +260,12 @@ func (s *Server) handleAnonymousChallenge(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, AnonymousChallengeResponse{
-		ChallengeID: challenge.ID,
-		Nonce:       challenge.Nonce,
-		PolicyEpoch: challenge.PolicyEpoch,
-		ProofType:   challenge.ProofType,
-		ExpiresAt:   challenge.ExpiresAt,
+		ChallengeID:   challenge.ID,
+		Nonce:         challenge.Nonce,
+		ChallengeHash: deriveVPNAccessV1ChallengeHash(challenge),
+		PolicyEpoch:   challenge.PolicyEpoch,
+		ProofType:     challenge.ProofType,
+		ExpiresAt:     challenge.ExpiresAt,
 	})
 }
 
@@ -677,11 +679,17 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	sessionExpiresAt := time.Now().Add(s.cfg.CredentialTTL)
+	if validatedVPNAccess != nil && validatedVPNAccess.ExpiryBucket.Before(sessionExpiresAt) {
+		sessionExpiresAt = validatedVPNAccess.ExpiryBucket
+	}
+
 	session := s.gate.CreateAnonymousSession(nftgate.AnonymousSessionParams{
 		Tier:           tier,
 		PolicyEpoch:    challenge.PolicyEpoch,
 		NullifierHash:  req.NullifierHash,
 		SessionKeyHash: req.SessionKeyHash,
+		ExpiresAt:      sessionExpiresAt,
 	})
 	if session == nil {
 		s.anonAuth.ReleaseNullifier(req.NullifierHash)

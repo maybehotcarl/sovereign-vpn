@@ -106,12 +106,16 @@ type AnonymousSessionParams struct {
 	PolicyEpoch    uint64
 	NullifierHash  string
 	SessionKeyHash string
+	ExpiresAt      time.Time
 }
 
 // CreateAnonymousSession creates a new authenticated session without binding it to a wallet address.
 func (g *Gate) CreateAnonymousSession(params AnonymousSessionParams) *Session {
 	now := time.Now()
 	expiresAt := now.Add(g.credTTL)
+	if !params.ExpiresAt.IsZero() && params.ExpiresAt.Before(expiresAt) {
+		expiresAt = params.ExpiresAt
+	}
 	id, token, err := g.newSessionToken(expiresAt)
 	if err != nil {
 		log.Printf("[nftgate] Failed to issue anonymous session token: %v", err)

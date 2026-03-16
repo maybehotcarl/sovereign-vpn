@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,9 @@ func TestHandleAnonymousChallenge(t *testing.T) {
 	if resp.Nonce == "" {
 		t.Fatal("expected nonce")
 	}
+	if resp.ChallengeHash == "" {
+		t.Fatal("expected challenge hash")
+	}
 	if resp.PolicyEpoch != 7 {
 		t.Fatalf("PolicyEpoch = %d, want 7", resp.PolicyEpoch)
 	}
@@ -188,7 +192,8 @@ func TestHandleAnonymousConnectMissingChallenge(t *testing.T) {
 	s := &Server{
 		anonAuth: anonauth.NewService(time.Minute, 8, "vpn_access_v1", 7),
 	}
-	body := `{"challenge_id":"missing","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_signals":["root","7","2","123","nul_1","challenge","sess_1"],"public_key":"wg_pub"}` //nolint:lll
+	sessionKeyHash := deriveVPNAccessV1SessionKeyHash("wg_pub")
+	body := `{"challenge_id":"missing","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"` + sessionKeyHash + `","public_signals":["root","7","2","4102444800","nul_1","challenge","` + sessionKeyHash + `"],"public_key":"wg_pub"}` //nolint:lll
 	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -209,7 +214,8 @@ func TestHandleAnonymousConnectRequiresVerifier(t *testing.T) {
 		t.Fatalf("NewChallenge: %v", err)
 	}
 
-	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_signals":["root","7","2","123","nul_1","challenge","sess_1"],"public_key":"wg_pub"}` //nolint:lll
+	sessionKeyHash := deriveVPNAccessV1SessionKeyHash("wg_pub")
+	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"` + sessionKeyHash + `","public_signals":["root","7","2","4102444800","nul_1","` + deriveVPNAccessV1ChallengeHash(challenge) + `","` + sessionKeyHash + `"],"public_key":"wg_pub"}` //nolint:lll
 	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -225,20 +231,35 @@ func TestValidateVPNAccessV1Signals(t *testing.T) {
 	req := AnonymousConnectRequest{
 		ProofType:      vpnAccessV1ProofType,
 		NullifierHash:  "nul_1",
-		SessionKeyHash: "sess_1",
-		PublicSignals:  []string{"root", "7", "2", "123", "nul_1", "challenge", "sess_1"},
+		SessionKeyHash: deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		PublicKey:      "wg_pub",
+		PublicSignals: []string{
+			"root",
+			"7",
+			"2",
+			strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10),
+			"nul_1",
+			"",
+			deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		},
 	}
-	challenge := &anonauth.Challenge{PolicyEpoch: 7}
+	challenge := &anonauth.Challenge{
+		ID:          "chal_1",
+		Nonce:       "nonce_1",
+		PolicyEpoch: 7,
+		ExpiresAt:   time.Now().Add(time.Minute),
+	}
+	req.PublicSignals[vpnAccessChallengeIndex] = deriveVPNAccessV1ChallengeHash(challenge)
 
 	signals, err := validateVPNAccessV1Signals(challenge, req)
 	if err != nil {
 		t.Fatalf("validateVPNAccessV1Signals: %v", err)
 	}
-	if signals.PolicyEpoch != "7" {
-		t.Fatalf("PolicyEpoch = %q, want 7", signals.PolicyEpoch)
+	if signals.PolicyEpoch != 7 {
+		t.Fatalf("PolicyEpoch = %d, want 7", signals.PolicyEpoch)
 	}
-	if signals.SessionKeyHash != "sess_1" {
-		t.Fatalf("SessionKeyHash = %q, want sess_1", signals.SessionKeyHash)
+	if signals.SessionKeyHash != deriveVPNAccessV1SessionKeyHash("wg_pub") {
+		t.Fatalf("SessionKeyHash = %q, want derived session hash", signals.SessionKeyHash)
 	}
 }
 
@@ -246,13 +267,84 @@ func TestValidateVPNAccessV1SignalsRejectsPolicyEpochMismatch(t *testing.T) {
 	req := AnonymousConnectRequest{
 		ProofType:      vpnAccessV1ProofType,
 		NullifierHash:  "nul_1",
-		SessionKeyHash: "sess_1",
-		PublicSignals:  []string{"root", "8", "2", "123", "nul_1", "challenge", "sess_1"},
+		SessionKeyHash: deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		PublicKey:      "wg_pub",
+		PublicSignals: []string{
+			"root",
+			"8",
+			"2",
+			strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10),
+			"nul_1",
+			"challenge",
+			deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		},
 	}
-	challenge := &anonauth.Challenge{PolicyEpoch: 7}
+	challenge := &anonauth.Challenge{
+		ID:          "chal_1",
+		Nonce:       "nonce_1",
+		PolicyEpoch: 7,
+		ExpiresAt:   time.Now().Add(time.Minute),
+	}
 
 	if _, err := validateVPNAccessV1Signals(challenge, req); err == nil {
 		t.Fatal("expected policy epoch mismatch error")
+	}
+}
+
+func TestValidateVPNAccessV1SignalsRejectsChallengeHashMismatch(t *testing.T) {
+	req := AnonymousConnectRequest{
+		ProofType:      vpnAccessV1ProofType,
+		NullifierHash:  "nul_1",
+		SessionKeyHash: deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		PublicKey:      "wg_pub",
+		PublicSignals: []string{
+			"root",
+			"7",
+			"2",
+			strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10),
+			"nul_1",
+			"wrong_challenge_hash",
+			deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		},
+	}
+	challenge := &anonauth.Challenge{
+		ID:          "chal_1",
+		Nonce:       "nonce_1",
+		PolicyEpoch: 7,
+		ExpiresAt:   time.Now().Add(time.Minute),
+	}
+
+	if _, err := validateVPNAccessV1Signals(challenge, req); err == nil {
+		t.Fatal("expected challenge hash mismatch error")
+	}
+}
+
+func TestValidateVPNAccessV1SignalsRejectsExpiredEntitlement(t *testing.T) {
+	req := AnonymousConnectRequest{
+		ProofType:      vpnAccessV1ProofType,
+		NullifierHash:  "nul_1",
+		SessionKeyHash: deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		PublicKey:      "wg_pub",
+		PublicSignals: []string{
+			"root",
+			"7",
+			"2",
+			strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10),
+			"nul_1",
+			"",
+			deriveVPNAccessV1SessionKeyHash("wg_pub"),
+		},
+	}
+	challenge := &anonauth.Challenge{
+		ID:          "chal_1",
+		Nonce:       "nonce_1",
+		PolicyEpoch: 7,
+		ExpiresAt:   time.Now().Add(time.Minute),
+	}
+	req.PublicSignals[vpnAccessChallengeIndex] = deriveVPNAccessV1ChallengeHash(challenge)
+
+	if _, err := validateVPNAccessV1Signals(challenge, req); err == nil {
+		t.Fatal("expected expired entitlement error")
 	}
 }
 

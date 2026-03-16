@@ -106,12 +106,14 @@ func TestActiveSessionCount(t *testing.T) {
 
 func TestCreateAnonymousSession(t *testing.T) {
 	g := testGate()
+	expiresAt := time.Now().Add(5 * time.Minute).UTC().Round(time.Second)
 
 	session := g.CreateAnonymousSession(AnonymousSessionParams{
 		Tier:           nftcheck.TierFree,
 		PolicyEpoch:    9,
 		NullifierHash:  "nul_abc",
 		SessionKeyHash: "sess_def",
+		ExpiresAt:      expiresAt,
 	})
 	if session == nil {
 		t.Fatal("expected anonymous session, got nil")
@@ -124,6 +126,9 @@ func TestCreateAnonymousSession(t *testing.T) {
 	}
 	if session.NullifierHash != "nul_abc" {
 		t.Fatalf("NullifierHash = %q, want nul_abc", session.NullifierHash)
+	}
+	if session.ExpiresAt.After(expiresAt.Add(2 * time.Second)) {
+		t.Fatalf("ExpiresAt = %s, expected near %s", session.ExpiresAt, expiresAt)
 	}
 
 	got := g.GetSessionByToken(session.Token)
