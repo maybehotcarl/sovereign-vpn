@@ -188,7 +188,7 @@ func TestHandleAnonymousConnectMissingChallenge(t *testing.T) {
 	s := &Server{
 		anonAuth: anonauth.NewService(time.Minute, 8, "vpn_access_v1", 7),
 	}
-	body := `{"challenge_id":"missing","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_key":"wg_pub"}` //nolint:lll
+	body := `{"challenge_id":"missing","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_signals":["root","7","2","123","nul_1","challenge","sess_1"],"public_key":"wg_pub"}` //nolint:lll
 	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -209,7 +209,7 @@ func TestHandleAnonymousConnectRequiresVerifier(t *testing.T) {
 		t.Fatalf("NewChallenge: %v", err)
 	}
 
-	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_key":"wg_pub"}` //nolint:lll
+	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"sess_1","public_signals":["root","7","2","123","nul_1","challenge","sess_1"],"public_key":"wg_pub"}` //nolint:lll
 	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -218,6 +218,41 @@ func TestHandleAnonymousConnectRequiresVerifier(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestValidateVPNAccessV1Signals(t *testing.T) {
+	req := AnonymousConnectRequest{
+		ProofType:      vpnAccessV1ProofType,
+		NullifierHash:  "nul_1",
+		SessionKeyHash: "sess_1",
+		PublicSignals:  []string{"root", "7", "2", "123", "nul_1", "challenge", "sess_1"},
+	}
+	challenge := &anonauth.Challenge{PolicyEpoch: 7}
+
+	signals, err := validateVPNAccessV1Signals(challenge, req)
+	if err != nil {
+		t.Fatalf("validateVPNAccessV1Signals: %v", err)
+	}
+	if signals.PolicyEpoch != "7" {
+		t.Fatalf("PolicyEpoch = %q, want 7", signals.PolicyEpoch)
+	}
+	if signals.SessionKeyHash != "sess_1" {
+		t.Fatalf("SessionKeyHash = %q, want sess_1", signals.SessionKeyHash)
+	}
+}
+
+func TestValidateVPNAccessV1SignalsRejectsPolicyEpochMismatch(t *testing.T) {
+	req := AnonymousConnectRequest{
+		ProofType:      vpnAccessV1ProofType,
+		NullifierHash:  "nul_1",
+		SessionKeyHash: "sess_1",
+		PublicSignals:  []string{"root", "8", "2", "123", "nul_1", "challenge", "sess_1"},
+	}
+	challenge := &anonauth.Challenge{PolicyEpoch: 7}
+
+	if _, err := validateVPNAccessV1Signals(challenge, req); err == nil {
+		t.Fatal("expected policy epoch mismatch error")
 	}
 }
 

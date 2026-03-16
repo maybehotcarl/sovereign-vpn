@@ -625,6 +625,16 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "proof_type does not match challenge")
 		return
 	}
+
+	var validatedVPNAccess *vpnAccessV1Signals
+	if req.ProofType == vpnAccessV1ProofType {
+		validated, err := validateVPNAccessV1Signals(challenge, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		validatedVPNAccess = validated
+	}
 	if s.zkClient == nil {
 		writeError(w, http.StatusServiceUnavailable, "anonymous verifier not configured")
 		return
@@ -646,15 +656,21 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tier := s.tierFromZKProof(&zkProofPayload{
-		ProofType:     req.ProofType,
-		Proof:         req.Proof,
-		PublicSignals: req.PublicSignals,
-	})
-	tier = s.effectiveTier(tier)
-	if tier != nftcheck.TierFree {
-		writeError(w, http.StatusNotImplemented, "anonymous paid tier not implemented")
-		return
+	tier := nftcheck.TierPaid
+	if req.ProofType != vpnAccessV1ProofType {
+		tier = s.tierFromZKProof(&zkProofPayload{
+			ProofType:     req.ProofType,
+			Proof:         req.Proof,
+			PublicSignals: req.PublicSignals,
+		})
+		tier = s.effectiveTier(tier)
+		if tier != nftcheck.TierFree {
+			writeError(w, http.StatusNotImplemented, "anonymous paid tier not implemented")
+			return
+		}
+	} else {
+		req.NullifierHash = validatedVPNAccess.NullifierHash
+		req.SessionKeyHash = validatedVPNAccess.SessionKeyHash
 	}
 	if !s.anonAuth.ConsumeNullifier(req.NullifierHash, s.cfg.CredentialTTL) {
 		writeError(w, http.StatusConflict, "nullifier already used")
