@@ -2,8 +2,8 @@ package server
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +22,17 @@ const (
 	vpnAccessChallengeIndex = 5
 	vpnAccessSessionIndex   = 6
 )
+
+var bn254FieldModulus = func() *big.Int {
+	modulus, ok := new(big.Int).SetString(
+		"21888242871839275222246405745257275088548364400416034343698204186575808495617",
+		10,
+	)
+	if !ok {
+		panic("invalid bn254 modulus")
+	}
+	return modulus
+}()
 
 type vpnAccessV1Signals struct {
 	Root             string
@@ -43,12 +54,18 @@ func deriveVPNAccessV1ChallengeHash(challenge *anonauth.Challenge) string {
 	}, "|")
 
 	sum := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(sum[:])
+	return hashBytesToFieldString(sum[:])
 }
 
 func deriveVPNAccessV1SessionKeyHash(publicKey string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(publicKey)))
-	return hex.EncodeToString(sum[:])
+	return hashBytesToFieldString(sum[:])
+}
+
+func hashBytesToFieldString(input []byte) string {
+	value := new(big.Int).SetBytes(input)
+	value.Mod(value, bn254FieldModulus)
+	return value.String()
 }
 
 func validateVPNAccessV1Signals(

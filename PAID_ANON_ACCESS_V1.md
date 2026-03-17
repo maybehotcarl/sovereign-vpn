@@ -244,6 +244,11 @@ The client generates a `vpn_access_v1` proof that demonstrates:
 - binding to `session_key_hash`
 - a valid challenge-scoped nullifier
 
+For circuit compatibility, `challenge_hash` and `session_key_hash` should be
+represented as field-safe decimal strings on the wire, not raw hex digests.
+Hashing may still use SHA-256 upstream, but the final public-signal value must
+be reduced into the proving field before it reaches the gateway/verifier.
+
 ### Phase 5: Gateway Verification
 
 The gateway forwards the proof to the ZK service and requires all of the following:
