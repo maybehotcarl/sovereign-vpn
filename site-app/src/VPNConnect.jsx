@@ -11,6 +11,7 @@ import {
   deriveVPNAccessV1SessionKeyHash,
   validateAnonymousVPNConfig,
 } from './anonymous';
+import { getOrCreateAnonymousVPNIdentity } from './anonymousIdentity';
 
 const FREE_STEPS = [
   { id: 'challenge', label: 'Requesting challenge...' },
@@ -193,20 +194,52 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       apiUrl: config.apiUrl,
       artifactBaseUrl: config.artifactBaseUrl,
     });
+    const identity = getOrCreateAnonymousVPNIdentity();
+    const identityCommitment = await zkClient.deriveVPNAccessIdentityCommitment(identity);
 
-    const proofResult = await zkClient.proveVPNAccessV1(
-      {
-        identitySecret: config.identitySecret,
-        identitySalt: config.identitySalt,
-        challengeHash,
-        sessionKeyHash,
-      },
-      (stage) => {
-        if (stage === 'done') {
-          markDone(1, 'Anonymous proof generated');
+    if (config.devRegistrationEnabled) {
+      const registrationClient =
+        config.devRegistrationUrl === config.apiUrl
+          ? zkClient
+          : new ZKClient({
+              apiUrl: config.devRegistrationUrl,
+              artifactBaseUrl: config.artifactBaseUrl,
+            });
+      await registrationClient.registerVPNAccessDevEntitlement({
+        identityCommitment,
+        policyEpoch: challenge.policy_epoch,
+        registrationToken: config.devRegistrationToken,
+        metadata: {
+          source: 'site-app',
+        },
+      });
+    }
+
+    let proofResult;
+    try {
+      proofResult = await zkClient.proveVPNAccessV1(
+        {
+          identitySecret: identity.identitySecret,
+          identitySalt: identity.identitySalt,
+          challengeHash,
+          sessionKeyHash,
+        },
+        (stage) => {
+          if (stage === 'done') {
+            markDone(1, 'Anonymous proof generated');
+          }
         }
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Proof not found')) {
+        throw new Error(
+          config.devRegistrationEnabled
+            ? 'Anonymous entitlement was not published for this device identity.'
+            : 'No anonymous entitlement was found for this device identity.'
+        );
       }
-    );
+      throw err;
+    }
 
     setCurrentStep(2);
     const connectResp = await fetch(`${gatewayUrl}/vpn/anonymous/connect`, {
@@ -459,7 +492,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         <h2 style={{ marginBottom: 12 }}>Connect & Get VPN Config</h2>
         <p style={{ color: 'var(--muted)', marginBottom: 24 }}>
           {anonMode
-            ? 'Anonymous access beta: prove your paid entitlement locally and get a WireGuard config without signing in to the gateway.'
+            ? 'Anonymous access beta: this browser keeps a local anonymous identity, proves your entitlement locally, and gets a WireGuard config without signing in to the gateway.'
             : 'Sign in with your wallet to verify your Memes card and get a WireGuard config file.'}
         </p>
 

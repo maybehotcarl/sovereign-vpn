@@ -36,6 +36,9 @@ export function anonymousVPNConfig(gatewayUrl = '') {
     ? normalizeBaseUrl(gatewayUrl)
     : window.location.origin;
   const apiUrl = normalizeBaseUrl(configuredZKApiUrl || fallbackBaseUrl);
+  const configuredDevRegistrationUrl = (
+    import.meta.env.VITE_VPN_ACCESS_DEV_REGISTRATION_URL || apiUrl
+  ).trim();
   const artifactBaseUrl = normalizeBaseUrl(
     (import.meta.env.VITE_ZK_ARTIFACT_BASE_URL || `${apiUrl}/api/artifacts`).trim()
   );
@@ -45,24 +48,24 @@ export function anonymousVPNConfig(gatewayUrl = '') {
     proofType: PROOF_TYPE,
     apiUrl,
     artifactBaseUrl,
-    identitySecret: (import.meta.env.VITE_VPN_ACCESS_IDENTITY_SECRET || '').trim(),
-    identitySalt: (import.meta.env.VITE_VPN_ACCESS_IDENTITY_SALT || '').trim(),
+    devRegistrationEnabled: envFlag(
+      import.meta.env.VITE_ENABLE_ANON_VPN_DEV_REGISTRATION || ''
+    ),
+    devRegistrationUrl: normalizeBaseUrl(configuredDevRegistrationUrl),
+    devRegistrationToken: (import.meta.env.VITE_VPN_ACCESS_DEV_REGISTRATION_TOKEN || '').trim(),
   };
 }
 
 export function validateAnonymousVPNConfig(config) {
   const problems = [];
-  if (!config.identitySecret) {
-    problems.push('VITE_VPN_ACCESS_IDENTITY_SECRET is required');
-  }
-  if (!config.identitySalt) {
-    problems.push('VITE_VPN_ACCESS_IDENTITY_SALT is required');
-  }
   if (!config.apiUrl) {
     problems.push('VITE_ZK_API_URL or gateway URL is required');
   }
   if (!config.artifactBaseUrl) {
     problems.push('VITE_ZK_ARTIFACT_BASE_URL is required');
+  }
+  if (config.devRegistrationEnabled && !config.devRegistrationUrl) {
+    problems.push('VITE_VPN_ACCESS_DEV_REGISTRATION_URL is required when dev registration is enabled');
   }
   return problems;
 }
