@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -86,6 +87,65 @@ func (c *Client) VerifyProof(ctx context.Context, payload ProofPayload) (*Verify
 	}
 
 	var result VerifyResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// MerkleRootResult is the response from GET /api/zk?type=<proofType>.
+type MerkleRootResult struct {
+	Success bool            `json:"success"`
+	Data    *MerkleRootData `json:"data,omitempty"`
+}
+
+// MerkleRootData describes the latest published root for a proof type.
+type MerkleRootData struct {
+	Root       string         `json:"root"`
+	Depth      int            `json:"depth"`
+	EntryCount int            `json:"entryCount"`
+	CreatedAt  string         `json:"createdAt"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+}
+
+// GetMerkleRoot fetches the latest published Merkle root metadata for a proof type.
+func (c *Client) GetMerkleRoot(ctx context.Context, proofType string) (*MerkleRootResult, error) {
+	if proofType == "" {
+		return nil, fmt.Errorf("proof type is required")
+	}
+
+	reqURL := c.baseURL + "/api/zk?type=" + url.QueryEscape(proofType)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("calling ZK API root endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("ZK API error (%d): %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("ZK API returned status %d", resp.StatusCode)
+	}
+
+	var result MerkleRootResult
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
 func TestParseAddress(t *testing.T) {
@@ -185,6 +187,187 @@ func TestHandleAnonymousChallenge(t *testing.T) {
 	}
 	if resp.ProofType != "vpn_access_v1" {
 		t.Fatalf("ProofType = %q, want vpn_access_v1", resp.ProofType)
+	}
+}
+
+func TestHandleAnonymousChallengeUsesZKPolicyEpoch(t *testing.T) {
+	zkAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/zk" {
+			t.Fatalf("path = %q, want /api/zk", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("type"); got != vpnAccessV1ProofType {
+			t.Fatalf("type = %q, want %q", got, vpnAccessV1ProofType)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"root":       "123",
+				"depth":      20,
+				"entryCount": 1,
+				"createdAt":  time.Now().UTC().Format(time.RFC3339),
+				"metadata": map[string]any{
+					"policyEpoch": "9",
+				},
+			},
+		})
+	}))
+	defer zkAPI.Close()
+
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 1),
+		zkClient: zkverify.New(zkAPI.URL, ""),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/anonymous/challenge", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousChallenge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp AnonymousChallengeResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.PolicyEpoch != 9 {
+		t.Fatalf("PolicyEpoch = %d, want 9", resp.PolicyEpoch)
+	}
+	if s.anonAuth.PolicyEpoch() != 9 {
+		t.Fatalf("anonAuth.PolicyEpoch() = %d, want 9", s.anonAuth.PolicyEpoch())
+	}
+}
+
+func TestHandleAnonymousChallengeRejectsMissingPolicyEpochMetadata(t *testing.T) {
+	zkAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"root":       "123",
+				"depth":      20,
+				"entryCount": 1,
+				"createdAt":  time.Now().UTC().Format(time.RFC3339),
+				"metadata":   map[string]any{},
+			},
+		})
+	}))
+	defer zkAPI.Close()
+
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 1),
+		zkClient: zkverify.New(zkAPI.URL, ""),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/anonymous/challenge", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousChallenge(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp["error"] != "anonymous policy metadata unavailable" {
+		t.Fatalf("error = %q, want anonymous policy metadata unavailable", resp["error"])
+	}
+}
+
+func TestHandleAnonymousChallengeUsesCachedPolicyEpochWithinTTL(t *testing.T) {
+	callCount := 0
+	zkAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"root":       "123",
+				"depth":      20,
+				"entryCount": 1,
+				"createdAt":  time.Now().UTC().Format(time.RFC3339),
+				"metadata": map[string]any{
+					"policyEpoch": "9",
+				},
+			},
+		})
+	}))
+	defer zkAPI.Close()
+
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 1),
+		zkClient: zkverify.New(zkAPI.URL, ""),
+	}
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/auth/anonymous/challenge", nil)
+		rec := httptest.NewRecorder()
+
+		s.handleAnonymousChallenge(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("call %d: expected 200, got %d", i+1, rec.Code)
+		}
+	}
+
+	if callCount != 1 {
+		t.Fatalf("zk root fetch count = %d, want 1", callCount)
+	}
+}
+
+func TestSyncAnonymousPolicyEpochRefreshesInBackground(t *testing.T) {
+	refreshed := make(chan struct{}, 1)
+	callCount := 0
+	zkAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"root":       "123",
+				"depth":      20,
+				"entryCount": 1,
+				"createdAt":  time.Now().UTC().Format(time.RFC3339),
+				"metadata": map[string]any{
+					"policyEpoch": "12",
+				},
+			},
+		})
+		select {
+		case refreshed <- struct{}{}:
+		default:
+		}
+	}))
+	defer zkAPI.Close()
+
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 9),
+		zkClient: zkverify.New(zkAPI.URL, ""),
+	}
+	s.markAnonymousPolicyFetched(time.Now().Add(-(anonymousPolicyBackgroundRefreshAge + time.Second)))
+
+	if err := s.syncAnonymousPolicyEpoch(context.Background()); err != nil {
+		t.Fatalf("syncAnonymousPolicyEpoch: %v", err)
+	}
+
+	select {
+	case <-refreshed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected background refresh")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.anonAuth.PolicyEpoch() == 12 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if s.anonAuth.PolicyEpoch() != 12 {
+		t.Fatalf("anonAuth.PolicyEpoch() = %d, want 12", s.anonAuth.PolicyEpoch())
+	}
+	if callCount != 1 {
+		t.Fatalf("zk root fetch count = %d, want 1", callCount)
 	}
 }
 

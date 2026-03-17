@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -27,27 +28,37 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
+const (
+	anonymousPolicyCacheTTL             = 30 * time.Second
+	anonymousPolicyBackgroundRefreshAge = 20 * time.Second
+	anonymousPolicyRefreshTimeout       = 5 * time.Second
+)
+
 // Server is the Sovereign VPN gateway.
 type Server struct {
-	cfg         *config.Config
-	anonAuth    *anonauth.Service
-	freeTier    bool
-	siwe        *siwe.Service
-	checker     nftcheck.AccessChecker
-	gate        *nftgate.Gate
-	wg          *wireguard.Manager
-	registry    *noderegistry.Registry
-	userRep     *rep6529.Checker
-	sessionMgr  *sessionmgr.Manager
-	subMgr      *subscriptionmgr.Manager
-	zkClient    *zkverify.Client
-	payoutVault *payoutvault.Client
-	thisCardID  int64
-	peerMu      sync.RWMutex
-	peerOwners  map[string]string
-	mux         *http.ServeMux
-	corsOrigin  string
-	limiter     *ratelimit.Limiter
+	cfg                 *config.Config
+	anonAuth            *anonauth.Service
+	freeTier            bool
+	siwe                *siwe.Service
+	checker             nftcheck.AccessChecker
+	gate                *nftgate.Gate
+	wg                  *wireguard.Manager
+	registry            *noderegistry.Registry
+	userRep             *rep6529.Checker
+	sessionMgr          *sessionmgr.Manager
+	subMgr              *subscriptionmgr.Manager
+	zkClient            *zkverify.Client
+	payoutVault         *payoutvault.Client
+	thisCardID          int64
+	peerMu              sync.RWMutex
+	peerOwners          map[string]string
+	policyMu            sync.RWMutex
+	policyFetchMu       sync.Mutex
+	policyFetchedAt     time.Time
+	policyRefreshQueued bool
+	mux                 *http.ServeMux
+	corsOrigin          string
+	limiter             *ratelimit.Limiter
 }
 
 // New creates a new gateway server.
@@ -252,6 +263,12 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 // POST /auth/anonymous/challenge
 // Response: { "challenge_id": "...", "nonce": "...", "policy_epoch": 1, "proof_type": "vpn_access_v1", "expires_at": "..." }
 func (s *Server) handleAnonymousChallenge(w http.ResponseWriter, r *http.Request) {
+	if err := s.syncAnonymousPolicyEpoch(r.Context()); err != nil {
+		log.Printf("Error syncing anonymous policy epoch: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "anonymous policy metadata unavailable")
+		return
+	}
+
 	challenge, err := s.anonAuth.NewChallenge()
 	if err != nil {
 		log.Printf("Error generating anonymous challenge: %v", err)
@@ -989,6 +1006,149 @@ func (s *Server) effectiveTier(tier nftcheck.AccessTier) nftcheck.AccessTier {
 		return nftcheck.TierPaid
 	}
 	return tier
+}
+
+func (s *Server) syncAnonymousPolicyEpoch(ctx context.Context) error {
+	if s.zkClient == nil {
+		return nil
+	}
+
+	if s.anonymousPolicyCacheFresh() {
+		s.maybeRefreshAnonymousPolicyEpochAsync()
+		return nil
+	}
+
+	return s.refreshAnonymousPolicyEpoch(ctx, false)
+}
+
+func (s *Server) refreshAnonymousPolicyEpoch(ctx context.Context, force bool) error {
+	s.policyFetchMu.Lock()
+	defer s.policyFetchMu.Unlock()
+
+	if !force && s.anonymousPolicyCacheFresh() {
+		return nil
+	}
+
+	root, err := s.zkClient.GetMerkleRoot(ctx, vpnAccessV1ProofType)
+	if err != nil {
+		return err
+	}
+	if root == nil || !root.Success || root.Data == nil {
+		return fmt.Errorf("missing %s root data", vpnAccessV1ProofType)
+	}
+
+	policyEpoch, err := policyEpochFromMetadata(root.Data.Metadata)
+	if err != nil {
+		return err
+	}
+	if current := s.anonAuth.PolicyEpoch(); current != policyEpoch {
+		s.anonAuth.SetPolicyEpoch(policyEpoch)
+		log.Printf("Anonymous policy epoch updated: %d -> %d", current, policyEpoch)
+	}
+	s.markAnonymousPolicyFetched(time.Now().UTC())
+	return nil
+}
+
+func (s *Server) maybeRefreshAnonymousPolicyEpochAsync() {
+	if !s.shouldRefreshAnonymousPolicyInBackground() {
+		return
+	}
+
+	s.policyMu.Lock()
+	if s.policyRefreshQueued {
+		s.policyMu.Unlock()
+		return
+	}
+	s.policyRefreshQueued = true
+	s.policyMu.Unlock()
+
+	go func() {
+		defer s.setAnonymousPolicyRefreshQueued(false)
+
+		ctx, cancel := context.WithTimeout(context.Background(), anonymousPolicyRefreshTimeout)
+		defer cancel()
+
+		if err := s.refreshAnonymousPolicyEpoch(ctx, true); err != nil {
+			log.Printf("Background anonymous policy refresh failed: %v", err)
+		}
+	}()
+}
+
+func (s *Server) anonymousPolicyCacheFresh() bool {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return !s.policyFetchedAt.IsZero() && time.Since(s.policyFetchedAt) < anonymousPolicyCacheTTL
+}
+
+func (s *Server) shouldRefreshAnonymousPolicyInBackground() bool {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return !s.policyFetchedAt.IsZero() &&
+		time.Since(s.policyFetchedAt) >= anonymousPolicyBackgroundRefreshAge &&
+		time.Since(s.policyFetchedAt) < anonymousPolicyCacheTTL
+}
+
+func (s *Server) markAnonymousPolicyFetched(at time.Time) {
+	s.policyMu.Lock()
+	s.policyFetchedAt = at
+	s.policyMu.Unlock()
+}
+
+func (s *Server) setAnonymousPolicyRefreshQueued(queued bool) {
+	s.policyMu.Lock()
+	s.policyRefreshQueued = queued
+	s.policyMu.Unlock()
+}
+
+func policyEpochFromMetadata(metadata map[string]any) (uint64, error) {
+	if len(metadata) == 0 {
+		return 0, fmt.Errorf("vpn_access_v1 root metadata missing policyEpoch")
+	}
+
+	value, ok := metadata["policyEpoch"]
+	if !ok {
+		return 0, fmt.Errorf("vpn_access_v1 root metadata missing policyEpoch")
+	}
+
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is empty")
+		}
+		epoch, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid: %w", err)
+		}
+		return epoch, nil
+	case json.Number:
+		epoch, err := strconv.ParseUint(v.String(), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid: %w", err)
+		}
+		return epoch, nil
+	case float64:
+		if v <= 0 || v != float64(uint64(v)) {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid")
+		}
+		return uint64(v), nil
+	case int:
+		if v <= 0 {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid")
+		}
+		return uint64(v), nil
+	case int64:
+		if v <= 0 {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid")
+		}
+		return uint64(v), nil
+	case uint64:
+		if v == 0 {
+			return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch is invalid")
+		}
+		return v, nil
+	default:
+		return 0, fmt.Errorf("vpn_access_v1 root metadata policyEpoch has unsupported type %T", value)
+	}
 }
 
 func (s *Server) claimsPeer(pubKey string, ownerID string) bool {
