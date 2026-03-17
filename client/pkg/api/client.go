@@ -32,6 +32,16 @@ type ChallengeResponse struct {
 	Nonce   string `json:"nonce"`
 }
 
+// AnonymousChallengeResponse is returned by POST /auth/anonymous/challenge.
+type AnonymousChallengeResponse struct {
+	ChallengeID   string `json:"challenge_id"`
+	Nonce         string `json:"nonce"`
+	ChallengeHash string `json:"challenge_hash"`
+	PolicyEpoch   uint64 `json:"policy_epoch"`
+	ProofType     string `json:"proof_type"`
+	ExpiresAt     string `json:"expires_at"`
+}
+
 // VerifyResponse is returned by POST /auth/verify.
 type VerifyResponse struct {
 	Address      string `json:"address"`
@@ -42,6 +52,29 @@ type VerifyResponse struct {
 
 // ConnectResponse is returned by POST /vpn/connect.
 type ConnectResponse struct {
+	ServerPublicKey string `json:"server_public_key"`
+	ServerEndpoint  string `json:"server_endpoint"`
+	ClientAddress   string `json:"client_address"`
+	DNS             string `json:"dns"`
+	AllowedIPs      string `json:"allowed_ips"`
+	ExpiresAt       string `json:"expires_at"`
+	Tier            string `json:"tier"`
+}
+
+// AnonymousConnectRequest is the body for POST /vpn/anonymous/connect.
+type AnonymousConnectRequest struct {
+	ChallengeID    string   `json:"challenge_id"`
+	ProofType      string   `json:"proof_type"`
+	Proof          any      `json:"proof"`
+	PublicSignals  []string `json:"public_signals"`
+	NullifierHash  string   `json:"nullifier_hash"`
+	SessionKeyHash string   `json:"session_key_hash"`
+	PublicKey      string   `json:"public_key"`
+}
+
+// AnonymousConnectResponse is returned by POST /vpn/anonymous/connect.
+type AnonymousConnectResponse struct {
+	SessionToken    string `json:"session_token"`
 	ServerPublicKey string `json:"server_public_key"`
 	ServerEndpoint  string `json:"server_endpoint"`
 	ClientAddress   string `json:"client_address"`
@@ -80,6 +113,25 @@ func (c *Client) GetChallenge(address string) (*ChallengeResponse, error) {
 	var result ChallengeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding challenge response: %w", err)
+	}
+	return &result, nil
+}
+
+// GetAnonymousChallenge requests an anonymous-access challenge.
+func (c *Client) GetAnonymousChallenge() (*AnonymousChallengeResponse, error) {
+	resp, err := c.post("/auth/anonymous/challenge", []byte("{}"))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	var result AnonymousChallengeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding anonymous challenge response: %w", err)
 	}
 	return &result, nil
 }
@@ -126,6 +178,30 @@ func (c *Client) Connect(sessionToken, publicKey string) (*ConnectResponse, erro
 	var result ConnectResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding connect response: %w", err)
+	}
+	return &result, nil
+}
+
+// AnonymousConnect requests a VPN connection using an anonymous proof.
+func (c *Client) AnonymousConnect(req AnonymousConnectRequest) (*AnonymousConnectResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("encoding anonymous connect request: %w", err)
+	}
+
+	resp, err := c.post("/vpn/anonymous/connect", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	var result AnonymousConnectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding anonymous connect response: %w", err)
 	}
 	return &result, nil
 }

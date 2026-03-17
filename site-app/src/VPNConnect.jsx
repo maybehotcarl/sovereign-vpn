@@ -4,6 +4,13 @@ import { formatEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { generateKeyPair } from './wgkeys';
 import { SESSION_MANAGER_ADDRESS, SESSION_MANAGER_ABI, SUBSCRIPTION_MANAGER_ABI } from './contracts';
+import {
+  anonymousVPNConfig,
+  anonymousVPNEnabled,
+  deriveVPNAccessV1ChallengeHash,
+  deriveVPNAccessV1SessionKeyHash,
+  validateAnonymousVPNConfig,
+} from './anonymous';
 
 const FREE_STEPS = [
   { id: 'challenge', label: 'Requesting challenge...' },
@@ -18,6 +25,12 @@ const PAID_STEPS = [
   { id: 'verify', label: 'Verifying NFT ownership on-chain...' },
   { id: 'payment', label: 'Confirm payment in your wallet...' },
   { id: 'confirm', label: 'Waiting for transaction confirmation...' },
+  { id: 'vpn', label: 'Provisioning VPN connection...' },
+];
+
+const ANON_STEPS = [
+  { id: 'challenge', label: 'Requesting anonymous challenge...' },
+  { id: 'prove', label: 'Generating anonymous access proof...' },
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
 
@@ -42,6 +55,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const { writeContractAsync } = useWriteContract();
+  const anonMode = anonymousVPNEnabled();
 
   const [phase, setPhase] = useState('idle'); // idle | running | payment | success | error
   const [steps, setSteps] = useState(FREE_STEPS);
@@ -65,24 +79,165 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     hash: paymentTxHash,
   });
 
-  // When tx confirms, continue the flow
-  useEffect(() => {
-    if (txConfirmed && phase === 'payment' && verifyData) {
-      continueAfterPayment();
-    }
-    if (txFailed && phase === 'payment') {
-      setErrorMsg('Transaction failed on-chain');
-      setPhase('error');
-    }
-  }, [txConfirmed, txFailed]);
-
   const markDone = (idx, text) => {
     setCompletedSteps(prev => ({ ...prev, [idx]: text }));
   };
 
+  const finalizeVPNProvision = useCallback(async (vpnData, keys, sessionMeta) => {
+    const config = [
+      '[Interface]',
+      `PrivateKey = ${keys.privateKey}`,
+      `Address = ${vpnData.client_address}`,
+      `DNS = ${vpnData.dns}`,
+      '',
+      '[Peer]',
+      `PublicKey = ${vpnData.server_public_key}`,
+      `Endpoint = ${vpnData.server_endpoint}`,
+      `AllowedIPs = 0.0.0.0/0, ::/0`,
+      'PersistentKeepalive = 25',
+    ].join('\n');
+
+    // Resolve node operator for dashboard payout panel.
+    // Paid flow already has it in tierOptions; free flow fetches /session/info.
+    let nodeOperator = tierOptions?.session?.node || '';
+    if (!nodeOperator) {
+      try {
+        const infoResp = await fetch(`${gatewayUrl}/session/info`);
+        if (infoResp.ok) {
+          const info = await infoResp.json();
+          nodeOperator = info.node_operator || '';
+        }
+      } catch {
+        // non-critical — payout panel just won't render
+      }
+    }
+
+    // Save session for the dashboard
+    if (onSessionCreated) {
+      onSessionCreated({
+        address: sessionMeta.address,
+        sessionToken: sessionMeta.sessionToken,
+        tier: vpnData.tier,
+        expiresAt: vpnData.expires_at,
+        serverEndpoint: vpnData.server_endpoint,
+        clientAddress: vpnData.client_address,
+        serverPublicKey: vpnData.server_public_key,
+        gatewayUrl,
+        nodeOperator,
+        vpnConfig: config,
+        connectedAt: new Date().toISOString(),
+        publicKey: keys.publicKey,
+      });
+      return; // parent will switch to dashboard view
+    }
+
+    // Fallback: show config inline (if no dashboard handler)
+    setVpnConfig(config);
+    setTierInfo(`Access tier: ${vpnData.tier} \u2022 Expires: ${new Date(vpnData.expires_at).toLocaleString()}`);
+    setTimeout(() => setPhase('success'), 400);
+  }, [gatewayUrl, onSessionCreated, tierOptions]);
+
+  const provisionVPN = useCallback(async (vData, stepIdx) => {
+    setCurrentStep(stepIdx);
+    const keys = generateKeyPair();
+
+    const connectResp = await fetch(`${gatewayUrl}/vpn/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_token: vData.session_token,
+        public_key: keys.publicKey,
+      }),
+    });
+    if (!connectResp.ok) {
+      const err = await connectResp.json();
+      throw new Error(err.error || 'Failed to provision VPN');
+    }
+    const vpnData = await connectResp.json();
+    markDone(stepIdx, 'VPN provisioned');
+
+    await finalizeVPNProvision(vpnData, keys, {
+      address: vData.address,
+      sessionToken: vData.session_token,
+    });
+  }, [finalizeVPNProvision, gatewayUrl]);
+
+  const startAnonymousVPN = useCallback(async () => {
+    const config = anonymousVPNConfig(gatewayUrl);
+    const configProblems = validateAnonymousVPNConfig(config);
+    if (configProblems.length > 0) {
+      throw new Error(`Anonymous access is not configured: ${configProblems.join('; ')}`);
+    }
+
+    const challengeResp = await fetch(`${gatewayUrl}/auth/anonymous/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!challengeResp.ok) {
+      const err = await challengeResp.json();
+      throw new Error(err.error || 'Failed to get anonymous challenge');
+    }
+    const challenge = await challengeResp.json();
+    if (challenge.proof_type !== 'vpn_access_v1') {
+      throw new Error(`Unsupported anonymous proof type: ${challenge.proof_type}`);
+    }
+    markDone(0, `Challenge received for epoch ${challenge.policy_epoch}`);
+
+    setCurrentStep(1);
+    const keys = generateKeyPair();
+    const challengeHash = await deriveVPNAccessV1ChallengeHash(challenge);
+    const sessionKeyHash = await deriveVPNAccessV1SessionKeyHash(keys.publicKey);
+
+    const { ZKClient } = await import('../6529-zk-service/dist/browser/index.js');
+    const zkClient = new ZKClient({
+      apiUrl: config.apiUrl,
+      artifactBaseUrl: config.artifactBaseUrl,
+    });
+
+    const proofResult = await zkClient.proveVPNAccessV1(
+      {
+        identitySecret: config.identitySecret,
+        identitySalt: config.identitySalt,
+        challengeHash,
+        sessionKeyHash,
+      },
+      (stage) => {
+        if (stage === 'done') {
+          markDone(1, 'Anonymous proof generated');
+        }
+      }
+    );
+
+    setCurrentStep(2);
+    const connectResp = await fetch(`${gatewayUrl}/vpn/anonymous/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        proof_type: proofResult.proofType,
+        proof: proofResult.proof,
+        public_signals: proofResult.publicSignals,
+        nullifier_hash: proofResult.publicSignals[4],
+        session_key_hash: sessionKeyHash,
+        public_key: keys.publicKey,
+      }),
+    });
+    if (!connectResp.ok) {
+      const err = await connectResp.json();
+      throw new Error(err.error || 'Failed to provision anonymous VPN');
+    }
+    const vpnData = await connectResp.json();
+    markDone(2, 'Anonymous VPN provisioned');
+
+    await finalizeVPNProvision(vpnData, keys, {
+      address: 'anonymous',
+      sessionToken: vpnData.session_token,
+    });
+  }, [finalizeVPNProvision, gatewayUrl]);
+
   const startVPN = useCallback(async () => {
     setPhase('running');
-    setSteps(FREE_STEPS);
+    setSteps(anonMode ? ANON_STEPS : FREE_STEPS);
     setCurrentStep(0);
     setCompletedSteps({});
     setErrorMsg('');
@@ -93,6 +248,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setTierOptions(null);
 
     try {
+      if (anonMode) {
+        await startAnonymousVPN();
+        return;
+      }
+
       // Step 0: Get challenge
       const challengeResp = await fetch(`${gatewayUrl}/auth/challenge`, {
         method: 'POST',
@@ -185,7 +345,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [address, signMessageAsync, gatewayUrl]);
+  }, [address, anonMode, gatewayUrl, provisionVPN, signMessageAsync, startAnonymousVPN]);
 
   const handlePayAndConnect = useCallback(async () => {
     if (!selectedTier || !verifyData || !tierOptions) return;
@@ -239,79 +399,18 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [verifyData, gatewayUrl]);
+  }, [provisionVPN, verifyData]);
 
-  const provisionVPN = async (vData, stepIdx) => {
-    setCurrentStep(stepIdx);
-    const keys = generateKeyPair();
-
-    const connectResp = await fetch(`${gatewayUrl}/vpn/connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_token: vData.session_token,
-        public_key: keys.publicKey,
-      }),
-    });
-    if (!connectResp.ok) {
-      const err = await connectResp.json();
-      throw new Error(err.error || 'Failed to provision VPN');
+  // When tx confirms, continue the flow
+  useEffect(() => {
+    if (txConfirmed && phase === 'payment' && verifyData) {
+      continueAfterPayment();
     }
-    const vpnData = await connectResp.json();
-    markDone(stepIdx, 'VPN provisioned');
-
-    const config = [
-      '[Interface]',
-      `PrivateKey = ${keys.privateKey}`,
-      `Address = ${vpnData.client_address}`,
-      `DNS = ${vpnData.dns}`,
-      '',
-      '[Peer]',
-      `PublicKey = ${vpnData.server_public_key}`,
-      `Endpoint = ${vpnData.server_endpoint}`,
-      `AllowedIPs = 0.0.0.0/0, ::/0`,
-      'PersistentKeepalive = 25',
-    ].join('\n');
-
-    // Resolve node operator for dashboard payout panel.
-    // Paid flow already has it in tierOptions; free flow fetches /session/info.
-    let nodeOperator = tierOptions?.session?.node || '';
-    if (!nodeOperator) {
-      try {
-        const infoResp = await fetch(`${gatewayUrl}/session/info`);
-        if (infoResp.ok) {
-          const info = await infoResp.json();
-          nodeOperator = info.node_operator || '';
-        }
-      } catch {
-        // non-critical — payout panel just won't render
-      }
+    if (txFailed && phase === 'payment') {
+      setErrorMsg('Transaction failed on-chain');
+      setPhase('error');
     }
-
-    // Save session for the dashboard
-    if (onSessionCreated) {
-      onSessionCreated({
-        address: vData.address,
-        sessionToken: vData.session_token,
-        tier: vpnData.tier,
-        expiresAt: vpnData.expires_at,
-        serverEndpoint: vpnData.server_endpoint,
-        clientAddress: vpnData.client_address,
-        serverPublicKey: vpnData.server_public_key,
-        gatewayUrl,
-        nodeOperator,
-        vpnConfig: config,
-        connectedAt: new Date().toISOString(),
-        publicKey: keys.publicKey,
-      });
-      return; // parent will switch to dashboard view
-    }
-
-    // Fallback: show config inline (if no dashboard handler)
-    setVpnConfig(config);
-    setTierInfo(`Access tier: ${vpnData.tier} \u2022 Expires: ${new Date(vpnData.expires_at).toLocaleString()}`);
-    setTimeout(() => setPhase('success'), 400);
-  };
+  }, [continueAfterPayment, phase, txConfirmed, txFailed, verifyData]);
 
   const downloadConfig = () => {
     const blob = new Blob([vpnConfig], { type: 'text/plain' });
@@ -359,18 +458,26 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       <div className="connect-box">
         <h2 style={{ marginBottom: 12 }}>Connect & Get VPN Config</h2>
         <p style={{ color: 'var(--muted)', marginBottom: 24 }}>
-          Sign in with your wallet to verify your Memes card and get a WireGuard config file.
+          {anonMode
+            ? 'Anonymous access beta: prove your paid entitlement locally and get a WireGuard config without signing in to the gateway.'
+            : 'Sign in with your wallet to verify your Memes card and get a WireGuard config file.'}
         </p>
 
-        {/* RainbowKit connect button — always visible until VPN is provisioned */}
-        {phase !== 'success' && (
+        {/* RainbowKit connect button — only used in the legacy wallet flow */}
+        {!anonMode && phase !== 'success' && (
           <div className="wallet-connect-wrapper">
             <ConnectButton showBalance={false} />
           </div>
         )}
 
+        {phase === 'idle' && anonMode && (
+          <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
+            Connect Anonymously & Get VPN Config
+          </button>
+        )}
+
         {/* Idle: show sign-in button once wallet is connected */}
-        {phase === 'idle' && isConnected && (
+        {phase === 'idle' && !anonMode && isConnected && (
           <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
             Sign In & Get VPN Config
           </button>
