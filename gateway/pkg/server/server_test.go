@@ -343,7 +343,7 @@ func TestSyncAnonymousPolicyEpochRefreshesInBackground(t *testing.T) {
 		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 9),
 		zkClient: zkverify.New(zkAPI.URL, ""),
 	}
-	s.markAnonymousPolicyFetched(time.Now().Add(-(anonymousPolicyBackgroundRefreshAge + time.Second)))
+	s.markAnonymousPolicyFetched("old-root", time.Now().Add(-(anonymousPolicyBackgroundRefreshAge + time.Second)))
 
 	if err := s.syncAnonymousPolicyEpoch(context.Background()); err != nil {
 		t.Fatalf("syncAnonymousPolicyEpoch: %v", err)
@@ -366,8 +366,66 @@ func TestSyncAnonymousPolicyEpochRefreshesInBackground(t *testing.T) {
 	if s.anonAuth.PolicyEpoch() != 12 {
 		t.Fatalf("anonAuth.PolicyEpoch() = %d, want 12", s.anonAuth.PolicyEpoch())
 	}
+	if s.currentAnonymousPolicyRoot() != "123" {
+		t.Fatalf("currentAnonymousPolicyRoot() = %q, want 123", s.currentAnonymousPolicyRoot())
+	}
 	if callCount != 1 {
 		t.Fatalf("zk root fetch count = %d, want 1", callCount)
+	}
+}
+
+func TestHandleAnonymousConnectRejectsStalePublishedRoot(t *testing.T) {
+	zkGetCalls := 0
+	zkAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/zk" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		zkGetCalls++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"root":       "root_current",
+				"depth":      20,
+				"entryCount": 1,
+				"createdAt":  time.Now().UTC().Format(time.RFC3339),
+				"metadata": map[string]any{
+					"policyEpoch": "7",
+				},
+			},
+		})
+	}))
+	defer zkAPI.Close()
+
+	s := &Server{
+		anonAuth: anonauth.NewService(time.Minute, 8, vpnAccessV1ProofType, 7),
+		zkClient: zkverify.New(zkAPI.URL, ""),
+	}
+	challenge, err := s.anonAuth.NewChallenge()
+	if err != nil {
+		t.Fatalf("NewChallenge: %v", err)
+	}
+
+	sessionKeyHash := deriveVPNAccessV1SessionKeyHash("wg_pub")
+	body := `{"challenge_id":"` + challenge.ID + `","proof_type":"vpn_access_v1","nullifier_hash":"nul_1","session_key_hash":"` + sessionKeyHash + `","public_signals":["root_old","7","2","4102444800","nul_1","` + deriveVPNAccessV1ChallengeHash(challenge) + `","` + sessionKeyHash + `"],"public_key":"wg_pub"}` //nolint:lll
+	req := httptest.NewRequest(http.MethodPost, "/vpn/anonymous/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleAnonymousVPNConnect(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp["error"] != "anonymous policy root changed, request a new challenge" {
+		t.Fatalf("error = %q, want anonymous policy root changed, request a new challenge", resp["error"])
+	}
+	if zkGetCalls != 1 {
+		t.Fatalf("zk root fetch count = %d, want 1", zkGetCalls)
 	}
 }
 

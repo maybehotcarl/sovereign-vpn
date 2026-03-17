@@ -54,6 +54,7 @@ type Server struct {
 	peerOwners          map[string]string
 	policyMu            sync.RWMutex
 	policyFetchMu       sync.Mutex
+	policyRoot          string
 	policyFetchedAt     time.Time
 	policyRefreshQueued bool
 	mux                 *http.ServeMux
@@ -644,19 +645,33 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "proof_type does not match challenge")
 		return
 	}
+	if s.zkClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "anonymous verifier not configured")
+		return
+	}
 
 	var validatedVPNAccess *vpnAccessV1Signals
 	if req.ProofType == vpnAccessV1ProofType {
+		if err := s.refreshAnonymousPolicyEpoch(r.Context(), true); err != nil {
+			log.Printf("Error refreshing anonymous policy state: %v", err)
+			writeError(w, http.StatusServiceUnavailable, "anonymous policy metadata unavailable")
+			return
+		}
 		validated, err := validateVPNAccessV1Signals(challenge, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		currentRoot := s.currentAnonymousPolicyRoot()
+		if currentRoot == "" {
+			writeError(w, http.StatusServiceUnavailable, "anonymous policy metadata unavailable")
+			return
+		}
+		if validated.Root != currentRoot {
+			writeError(w, http.StatusConflict, "anonymous policy root changed, request a new challenge")
+			return
+		}
 		validatedVPNAccess = validated
-	}
-	if s.zkClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "anonymous verifier not configured")
-		return
 	}
 
 	zkResult, err := s.zkClient.VerifyProof(r.Context(), zkverify.ProofPayload{
@@ -1041,11 +1056,14 @@ func (s *Server) refreshAnonymousPolicyEpoch(ctx context.Context, force bool) er
 	if err != nil {
 		return err
 	}
+	if root.Data.Root == "" {
+		return fmt.Errorf("%s root is empty", vpnAccessV1ProofType)
+	}
 	if current := s.anonAuth.PolicyEpoch(); current != policyEpoch {
 		s.anonAuth.SetPolicyEpoch(policyEpoch)
 		log.Printf("Anonymous policy epoch updated: %d -> %d", current, policyEpoch)
 	}
-	s.markAnonymousPolicyFetched(time.Now().UTC())
+	s.markAnonymousPolicyFetched(root.Data.Root, time.Now().UTC())
 	return nil
 }
 
@@ -1088,8 +1106,9 @@ func (s *Server) shouldRefreshAnonymousPolicyInBackground() bool {
 		time.Since(s.policyFetchedAt) < anonymousPolicyCacheTTL
 }
 
-func (s *Server) markAnonymousPolicyFetched(at time.Time) {
+func (s *Server) markAnonymousPolicyFetched(root string, at time.Time) {
 	s.policyMu.Lock()
+	s.policyRoot = root
 	s.policyFetchedAt = at
 	s.policyMu.Unlock()
 }
@@ -1098,6 +1117,12 @@ func (s *Server) setAnonymousPolicyRefreshQueued(queued bool) {
 	s.policyMu.Lock()
 	s.policyRefreshQueued = queued
 	s.policyMu.Unlock()
+}
+
+func (s *Server) currentAnonymousPolicyRoot() string {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.policyRoot
 }
 
 func policyEpochFromMetadata(metadata map[string]any) (uint64, error) {
