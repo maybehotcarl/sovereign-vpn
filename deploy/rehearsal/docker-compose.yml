@@ -1,0 +1,105 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway-a:
+    build:
+      context: ../../gateway
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/rehearsal/gateway-entrypoint.sh"]
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    ports:
+      - "${GW_A_HTTP_PORT:-8081}:8080"
+      - "${GW_A_WG_ENDPOINT_PORT:-51821}:51820/udp"
+    environment:
+      ETH_RPC_URL: ${ETH_RPC_URL}
+      MEMES_CONTRACT: ${MEMES_CONTRACT}
+      SUBSCRIPTION_MANAGER: ${SUBSCRIPTION_MANAGER}
+      ENABLE_FREE_TIER: ${ENABLE_FREE_TIER:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      ZK_API_URL: ${ZK_API_URL}
+      ZK_API_KEY: ${ZK_API_KEY:-}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_PREFIX: ${REDIS_PREFIX:-sovereign-vpn-rehearsal}
+      SESSION_SIGNING_KEY: ${SESSION_SIGNING_KEY}
+      GATEWAY_INSTANCE_ID: ${GW_A_INSTANCE_ID:-gw-a}
+      GATEWAY_PUBLIC_URL: ${GW_A_PUBLIC_URL:-http://127.0.0.1:8081}
+      GATEWAY_FORWARD_URL: ${GW_A_FORWARD_URL:-http://gateway-a:8080}
+      GATEWAY_FORWARDING_KEY: ${GATEWAY_FORWARDING_KEY}
+      WG_INTERFACE: wg0
+      WG_LISTEN_PORT: 51820
+      WG_ENDPOINT_HOST: 127.0.0.1
+      WG_ENDPOINT_PORT: ${GW_A_WG_ENDPOINT_PORT:-51821}
+      WG_SERVER_IP: ${GW_A_SERVER_IP:-10.80.1.1/24}
+      WG_SUBNET: ${GW_A_SUBNET:-10.80.1.0/24}
+      WG_DNS: 1.1.1.1
+    volumes:
+      - gateway-a-state:/var/lib/sovereign-vpn/wireguard
+      - ./gateway-entrypoint.sh:/rehearsal/gateway-entrypoint.sh:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  gateway-b:
+    build:
+      context: ../../gateway
+      dockerfile: Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/rehearsal/gateway-entrypoint.sh"]
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    ports:
+      - "${GW_B_HTTP_PORT:-8082}:8080"
+      - "${GW_B_WG_ENDPOINT_PORT:-51822}:51820/udp"
+    environment:
+      ETH_RPC_URL: ${ETH_RPC_URL}
+      MEMES_CONTRACT: ${MEMES_CONTRACT}
+      SUBSCRIPTION_MANAGER: ${SUBSCRIPTION_MANAGER}
+      ENABLE_FREE_TIER: ${ENABLE_FREE_TIER:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      ZK_API_URL: ${ZK_API_URL}
+      ZK_API_KEY: ${ZK_API_KEY:-}
+      REDIS_URL: ${REDIS_URL}
+      REDIS_PREFIX: ${REDIS_PREFIX:-sovereign-vpn-rehearsal}
+      SESSION_SIGNING_KEY: ${SESSION_SIGNING_KEY}
+      GATEWAY_INSTANCE_ID: ${GW_B_INSTANCE_ID:-gw-b}
+      GATEWAY_PUBLIC_URL: ${GW_B_PUBLIC_URL:-http://127.0.0.1:8082}
+      GATEWAY_FORWARD_URL: ${GW_B_FORWARD_URL:-http://gateway-b:8080}
+      GATEWAY_FORWARDING_KEY: ${GATEWAY_FORWARDING_KEY}
+      WG_INTERFACE: wg0
+      WG_LISTEN_PORT: 51820
+      WG_ENDPOINT_HOST: 127.0.0.1
+      WG_ENDPOINT_PORT: ${GW_B_WG_ENDPOINT_PORT:-51822}
+      WG_SERVER_IP: ${GW_B_SERVER_IP:-10.80.2.1/24}
+      WG_SUBNET: ${GW_B_SUBNET:-10.80.2.0/24}
+      WG_DNS: 1.1.1.1
+    volumes:
+      - gateway-b-state:/var/lib/sovereign-vpn/wireguard
+      - ./gateway-entrypoint.sh:/rehearsal/gateway-entrypoint.sh:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+volumes:
+  gateway-a-state:
+  gateway-b-state:

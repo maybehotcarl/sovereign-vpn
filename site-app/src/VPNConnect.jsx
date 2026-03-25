@@ -11,6 +11,11 @@ import {
   deriveVPNAccessV1SessionKeyHash,
   validateAnonymousVPNConfig,
 } from './anonymous';
+import {
+  AnonymousIssuerRequestError,
+  ensureAnonymousVPNIssuerEntitlement,
+  getAnonymousVPNMeta,
+} from './anonymousIssuer';
 import { getOrCreateAnonymousVPNIdentity } from './anonymousIdentity';
 
 const FREE_STEPS = [
@@ -31,6 +36,16 @@ const PAID_STEPS = [
 
 const ANON_STEPS = [
   { id: 'challenge', label: 'Requesting anonymous challenge...' },
+  { id: 'entitlement', label: 'Refreshing anonymous credential...' },
+  { id: 'prove', label: 'Generating anonymous access proof...' },
+  { id: 'vpn', label: 'Provisioning VPN connection...' },
+];
+
+const ANON_PAYMENT_STEPS = [
+  { id: 'challenge', label: 'Requesting anonymous challenge...' },
+  { id: 'entitlement', label: 'Checking anonymous entitlement...' },
+  { id: 'payment', label: 'Confirm subscription in your wallet...' },
+  { id: 'confirm', label: 'Waiting for transaction confirmation...' },
   { id: 'prove', label: 'Generating anonymous access proof...' },
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
@@ -42,6 +57,33 @@ const TIER_LABELS = {
   '90d': '90 Days',
   '365d': '365 Days',
 };
+
+async function readResponsePayload(response) {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function responseErrorMessage(payload, fallback) {
+  if (payload && typeof payload === 'object') {
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
+    }
+  }
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload.trim();
+  }
+  return fallback;
+}
 
 function formatDuration(seconds) {
   const days = Math.floor(seconds / 86400);
@@ -70,10 +112,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   // Paid tier state
   const [verifyData, setVerifyData] = useState(null);
   const [paymentTxHash, setPaymentTxHash] = useState(null);
+  const [paymentIntent, setPaymentIntent] = useState(null); // null | { kind: 'legacy-connect' | 'anon-subscription' }
 
   // Tier picker state
   const [selectedTier, setSelectedTier] = useState(null); // '24h' or tier object from API
-  const [tierOptions, setTierOptions] = useState(null); // { session: {...}, subscriptions: [...] }
+  const [tierOptions, setTierOptions] = useState(null); // { mode, session, subscriptions }
 
   // Watch for tx confirmation
   const { isSuccess: txConfirmed, isError: txFailed } = useWaitForTransactionReceipt({
@@ -84,7 +127,56 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setCompletedSteps(prev => ({ ...prev, [idx]: text }));
   };
 
+  const loadGatewayPaymentOptions = useCallback(async ({
+    includeSessionOption,
+    requireSubscriptionOptions,
+  }) => {
+    const [sessionResp, subResp] = await Promise.all([
+      fetch(`${gatewayUrl}/session/info`).catch(() => null),
+      fetch(`${gatewayUrl}/subscription/tiers`).catch(() => null),
+    ]);
+
+    const sessionInfo = sessionResp && sessionResp.ok ? await sessionResp.json() : null;
+    const subTiers = subResp && subResp.ok ? await subResp.json() : null;
+
+    if (!sessionInfo?.node_operator) {
+      throw new Error('Gateway does not expose node purchase info for subscriptions.');
+    }
+    if (requireSubscriptionOptions && (!subTiers?.tiers || subTiers.tiers.length === 0)) {
+      throw new Error('Gateway does not expose active subscription tiers.');
+    }
+    if (includeSessionOption && !sessionInfo?.contract) {
+      throw new Error('Gateway does not expose paid session pricing.');
+    }
+
+    return {
+      session: {
+        node: sessionInfo.node_operator,
+        duration: sessionInfo.duration_seconds,
+        costWei: sessionInfo.cost_wei,
+        costEth:
+          sessionInfo.cost_wei != null
+            ? formatEther(BigInt(sessionInfo.cost_wei))
+            : null,
+        contract: sessionInfo.contract || '',
+        chainId: sessionInfo.chain_id,
+      },
+      subscriptions: subTiers
+        ? subTiers.tiers.map(t => ({
+            id: t.id,
+            durationKey: formatDuration(t.duration_seconds),
+            duration: t.duration_seconds,
+            costWei: t.price_wei,
+            costEth: formatEther(BigInt(t.price_wei)),
+            contract: subTiers.contract,
+            chainId: subTiers.chain_id,
+          }))
+        : [],
+    };
+  }, [gatewayUrl]);
+
   const finalizeVPNProvision = useCallback(async (vpnData, keys, sessionMeta) => {
+    const resolvedGatewayUrl = vpnData.gateway_url || gatewayUrl;
     const config = [
       '[Interface]',
       `PrivateKey = ${keys.privateKey}`,
@@ -103,7 +195,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     let nodeOperator = tierOptions?.session?.node || '';
     if (!nodeOperator) {
       try {
-        const infoResp = await fetch(`${gatewayUrl}/session/info`);
+        const infoResp = await fetch(`${resolvedGatewayUrl}/session/info`);
         if (infoResp.ok) {
           const info = await infoResp.json();
           nodeOperator = info.node_operator || '';
@@ -123,7 +215,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         serverEndpoint: vpnData.server_endpoint,
         clientAddress: vpnData.client_address,
         serverPublicKey: vpnData.server_public_key,
-        gatewayUrl,
+        gatewayUrl: resolvedGatewayUrl,
         nodeOperator,
         vpnConfig: config,
         connectedAt: new Date().toISOString(),
@@ -151,10 +243,13 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       }),
     });
     if (!connectResp.ok) {
-      const err = await connectResp.json();
-      throw new Error(err.error || 'Failed to provision VPN');
+      const err = await readResponsePayload(connectResp);
+      throw new Error(responseErrorMessage(err, 'Failed to provision VPN'));
     }
-    const vpnData = await connectResp.json();
+    const vpnData = await readResponsePayload(connectResp);
+    if (!vpnData || typeof vpnData !== 'object') {
+      throw new Error('Gateway returned an invalid VPN response');
+    }
     markDone(stepIdx, 'VPN provisioned');
 
     await finalizeVPNProvision(vpnData, keys, {
@@ -175,10 +270,18 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       headers: { 'Content-Type': 'application/json' },
     });
     if (!challengeResp.ok) {
-      const err = await challengeResp.json();
-      throw new Error(err.error || 'Failed to get anonymous challenge');
+      const err = await readResponsePayload(challengeResp);
+      if (challengeResp.status === 404) {
+        throw new Error(
+          'Anonymous access is not available on the selected gateway.'
+        );
+      }
+      throw new Error(responseErrorMessage(err, 'Failed to get anonymous challenge'));
     }
-    const challenge = await challengeResp.json();
+    const challenge = await readResponsePayload(challengeResp);
+    if (!challenge || typeof challenge !== 'object') {
+      throw new Error('Gateway returned an invalid anonymous challenge response');
+    }
     if (challenge.proof_type !== 'vpn_access_v1') {
       throw new Error(`Unsupported anonymous proof type: ${challenge.proof_type}`);
     }
@@ -194,17 +297,68 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       apiUrl: config.apiUrl,
       artifactBaseUrl: config.artifactBaseUrl,
     });
+    const serviceMeta = await zkClient.getServiceMeta();
+    const anonymousMeta = getAnonymousVPNMeta(serviceMeta);
+    if (!anonymousMeta) {
+      throw new Error('Anonymous VPN service metadata is unavailable.');
+    }
     const identity = getOrCreateAnonymousVPNIdentity();
     const identityCommitment = await zkClient.deriveVPNAccessIdentityCommitment(identity);
+    const allowDevRegistrationFallback =
+      config.allowDevRegistrationFallback &&
+      anonymousMeta?.devRegistration?.enabled;
 
-    if (config.devRegistrationEnabled) {
+    let issuerEntitlement;
+    try {
+      issuerEntitlement = await ensureAnonymousVPNIssuerEntitlement({
+        apiUrl: config.apiUrl,
+        anonymousMeta,
+        address,
+        allowDevRegistrationFallback,
+        isConnected,
+        signMessageAsync,
+        identityCommitment,
+        policyEpoch: challenge.policy_epoch,
+      });
+    } catch (error) {
+      if (
+        error instanceof AnonymousIssuerRequestError &&
+        error.code === 'subscription_inactive'
+      ) {
+        const paymentOptions = await loadGatewayPaymentOptions({
+          includeSessionOption: false,
+          requireSubscriptionOptions: true,
+        });
+        setSteps(ANON_PAYMENT_STEPS);
+        markDone(0, `Challenge received for epoch ${challenge.policy_epoch}`);
+        markDone(1, 'Supported card verified; subscription required');
+        setTierOptions({
+          mode: 'anon-subscription',
+          ...paymentOptions,
+        });
+        setSelectedTier(null);
+        setPaymentIntent({ kind: 'anon-subscription' });
+        setCurrentStep(2);
+        setPhase('payment');
+        return;
+      }
+      throw error;
+    }
+    if (issuerEntitlement) {
+      markDone(
+        1,
+        issuerEntitlement.mode === 'refreshed'
+          ? 'Anonymous credential refreshed'
+          : 'Anonymous credential activated'
+      );
+    } else if (allowDevRegistrationFallback) {
       const registrationClient =
         config.devRegistrationUrl === config.apiUrl
           ? zkClient
           : new ZKClient({
               apiUrl: config.devRegistrationUrl,
               artifactBaseUrl: config.artifactBaseUrl,
-            });
+          });
       await registrationClient.registerVPNAccessDevEntitlement({
         identityCommitment,
         policyEpoch: challenge.policy_epoch,
@@ -213,8 +367,12 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           source: 'site-app',
         },
       });
+      markDone(1, 'Anonymous entitlement published');
+    } else {
+      throw new Error('Anonymous issuer did not return an entitlement result.');
     }
 
+    setCurrentStep(2);
     let proofResult;
     try {
       proofResult = await zkClient.proveVPNAccessV1(
@@ -226,14 +384,14 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         },
         (stage) => {
           if (stage === 'done') {
-            markDone(1, 'Anonymous proof generated');
+            markDone(2, 'Anonymous proof generated');
           }
         }
       );
     } catch (err) {
       if (err instanceof Error && err.message.includes('Proof not found')) {
         throw new Error(
-          config.devRegistrationEnabled
+          allowDevRegistrationFallback
             ? 'Anonymous entitlement was not published for this device identity.'
             : 'No anonymous entitlement was found for this device identity.'
         );
@@ -241,7 +399,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       throw err;
     }
 
-    setCurrentStep(2);
+    setCurrentStep(3);
     const connectResp = await fetch(`${gatewayUrl}/vpn/anonymous/connect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -256,17 +414,27 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       }),
     });
     if (!connectResp.ok) {
-      const err = await connectResp.json();
-      throw new Error(err.error || 'Failed to provision anonymous VPN');
+      const err = await readResponsePayload(connectResp);
+      throw new Error(responseErrorMessage(err, 'Failed to provision anonymous VPN'));
     }
-    const vpnData = await connectResp.json();
-    markDone(2, 'Anonymous VPN provisioned');
+    const vpnData = await readResponsePayload(connectResp);
+    if (!vpnData || typeof vpnData !== 'object') {
+      throw new Error('Gateway returned an invalid anonymous VPN response');
+    }
+    markDone(3, 'Anonymous VPN provisioned');
 
     await finalizeVPNProvision(vpnData, keys, {
       address: 'anonymous',
       sessionToken: vpnData.session_token,
     });
-  }, [finalizeVPNProvision, gatewayUrl]);
+  }, [
+    address,
+    finalizeVPNProvision,
+    gatewayUrl,
+    isConnected,
+    loadGatewayPaymentOptions,
+    signMessageAsync,
+  ]);
 
   const startVPN = useCallback(async () => {
     setPhase('running');
@@ -277,6 +445,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
     setVerifyData(null);
     setPaymentTxHash(null);
+    setPaymentIntent(null);
     setSelectedTier(null);
     setTierOptions(null);
 
@@ -293,10 +462,13 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         body: JSON.stringify({ address }),
       });
       if (!challengeResp.ok) {
-        const err = await challengeResp.json();
-        throw new Error(err.error || 'Failed to get challenge');
+        const err = await readResponsePayload(challengeResp);
+        throw new Error(responseErrorMessage(err, 'Failed to get challenge'));
       }
-      const challenge = await challengeResp.json();
+      const challenge = await readResponsePayload(challengeResp);
+      if (!challenge || typeof challenge !== 'object') {
+        throw new Error('Gateway returned an invalid challenge response');
+      }
       markDone(0, 'Challenge received');
 
       // Step 1: Sign message
@@ -311,7 +483,10 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: challenge.message, signature }),
       });
-      const vData = await verifyResp.json();
+      const vData = await readResponsePayload(verifyResp);
+      if (!vData || typeof vData !== 'object') {
+        throw new Error('Gateway returned an invalid verification response');
+      }
 
       if (vData.tier === 'denied') {
         if (vData.error && vData.error.includes('banned')) {
@@ -328,41 +503,16 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       if (vData.tier === 'paid' && SESSION_MANAGER_ADDRESS) {
         setSteps(PAID_STEPS);
         setVerifyData(vData);
+        setPaymentIntent({ kind: 'legacy-connect' });
 
-        // Fetch session info and subscription tiers in parallel
-        const [sessionResp, subResp] = await Promise.all([
-          fetch(`${gatewayUrl}/session/info`),
-          fetch(`${gatewayUrl}/subscription/tiers`).catch(() => null),
-        ]);
-
-        if (!sessionResp.ok) {
-          throw new Error('Failed to fetch session pricing');
-        }
-        const sessionInfo = await sessionResp.json();
-
-        let subTiers = null;
-        if (subResp && subResp.ok) {
-          subTiers = await subResp.json();
-        }
+        const paymentOptions = await loadGatewayPaymentOptions({
+          includeSessionOption: true,
+          requireSubscriptionOptions: false,
+        });
 
         setTierOptions({
-          session: {
-            node: sessionInfo.node_operator,
-            duration: sessionInfo.duration_seconds,
-            costWei: sessionInfo.cost_wei,
-            costEth: formatEther(BigInt(sessionInfo.cost_wei)),
-            contract: sessionInfo.contract,
-            chainId: sessionInfo.chain_id,
-          },
-          subscriptions: subTiers ? subTiers.tiers.map(t => ({
-            id: t.id,
-            durationKey: formatDuration(t.duration_seconds),
-            duration: t.duration_seconds,
-            costWei: t.price_wei,
-            costEth: formatEther(BigInt(t.price_wei)),
-            contract: subTiers.contract,
-            chainId: subTiers.chain_id,
-          })) : [],
+          mode: 'legacy',
+          ...paymentOptions,
         });
 
         setCurrentStep(3); // payment step
@@ -378,16 +528,19 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [address, anonMode, gatewayUrl, provisionVPN, signMessageAsync, startAnonymousVPN]);
+  }, [address, anonMode, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync, startAnonymousVPN]);
 
   const handlePayAndConnect = useCallback(async () => {
-    if (!selectedTier || !verifyData || !tierOptions) return;
+    if (!selectedTier || !tierOptions) return;
 
     try {
-      setPhase('running');
-
       let hash;
-      if (selectedTier === '24h') {
+      const paymentStepIndex =
+        paymentIntent?.kind === 'anon-subscription' ? 2 : 3;
+      const confirmStepIndex =
+        paymentIntent?.kind === 'anon-subscription' ? 3 : 4;
+
+      if (tierOptions.mode === 'legacy' && selectedTier === '24h') {
         // 24h session via SessionManager
         const info = tierOptions.session;
         hash = await writeContractAsync({
@@ -400,6 +553,9 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       } else {
         // Subscription via SubscriptionManager
         const tier = tierOptions.subscriptions.find(t => t.durationKey === selectedTier);
+        if (!tier) {
+          throw new Error('Select a valid subscription plan.');
+        }
         hash = await writeContractAsync({
           address: tier.contract,
           abi: SUBSCRIPTION_MANAGER_ABI,
@@ -409,10 +565,13 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         });
       }
 
-      markDone(3, 'Payment sent');
-
-      // Step 4: Wait for confirmation
-      setCurrentStep(4);
+      markDone(
+        paymentStepIndex,
+        paymentIntent?.kind === 'anon-subscription'
+          ? 'Subscription transaction sent'
+          : 'Payment sent'
+      );
+      setCurrentStep(confirmStepIndex);
       setPaymentTxHash(hash);
       // useWaitForTransactionReceipt will trigger continueAfterPayment via useEffect
     } catch (err) {
@@ -420,10 +579,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Payment failed');
       setPhase('error');
     }
-  }, [selectedTier, tierOptions, verifyData, writeContractAsync]);
+  }, [paymentIntent, selectedTier, tierOptions, writeContractAsync]);
 
   const continueAfterPayment = useCallback(async () => {
     try {
+      setPhase('running');
       markDone(4, 'Transaction confirmed');
       // Step 5: Provision VPN
       await provisionVPN(verifyData, 5);
@@ -434,8 +594,23 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     }
   }, [provisionVPN, verifyData]);
 
+  const continueAnonymousAfterSubscription = useCallback(async () => {
+    try {
+      markDone(3, 'Subscription confirmed');
+      await startVPN();
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err.message || 'Subscription confirmed but activation retry failed');
+      setPhase('error');
+    }
+  }, [startVPN]);
+
   // When tx confirms, continue the flow
   useEffect(() => {
+    if (txConfirmed && phase === 'payment' && paymentIntent?.kind === 'anon-subscription') {
+      continueAnonymousAfterSubscription();
+      return;
+    }
     if (txConfirmed && phase === 'payment' && verifyData) {
       continueAfterPayment();
     }
@@ -443,7 +618,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg('Transaction failed on-chain');
       setPhase('error');
     }
-  }, [continueAfterPayment, phase, txConfirmed, txFailed, verifyData]);
+  }, [continueAfterPayment, continueAnonymousAfterSubscription, paymentIntent, phase, txConfirmed, txFailed, verifyData]);
 
   const downloadConfig = () => {
     const blob = new Blob([vpnConfig], { type: 'text/plain' });
@@ -472,13 +647,16 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
     setVerifyData(null);
     setPaymentTxHash(null);
+    setPaymentIntent(null);
     setSelectedTier(null);
     setTierOptions(null);
   };
 
   // Build tier options for the picker
   const allTierOptions = tierOptions ? [
-    { key: '24h', label: '24 Hours', price: tierOptions.session.costEth },
+    ...(tierOptions.mode === 'legacy' && tierOptions.session?.costEth ? [
+      { key: '24h', label: '24 Hours', price: tierOptions.session.costEth },
+    ] : []),
     ...tierOptions.subscriptions.map(t => ({
       key: t.durationKey,
       label: TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`,
@@ -492,12 +670,12 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         <h2 style={{ marginBottom: 12 }}>Connect & Get VPN Config</h2>
         <p style={{ color: 'var(--muted)', marginBottom: 24 }}>
           {anonMode
-            ? 'Anonymous access beta: this browser keeps a local anonymous identity, proves your entitlement locally, and gets a WireGuard config without signing in to the gateway.'
+            ? 'Anonymous paid access beta: connect your wallet only to activate or refresh this browser entitlement, then the browser proves access locally and connects to the gateway anonymously.'
             : 'Sign in with your wallet to verify your Memes card and get a WireGuard config file.'}
         </p>
 
-        {/* RainbowKit connect button — only used in the legacy wallet flow */}
-        {!anonMode && phase !== 'success' && (
+        {/* Wallet connect is required for legacy flow and issuer-backed anonymous activation */}
+        {phase === 'idle' && (
           <div className="wallet-connect-wrapper">
             <ConnectButton showBalance={false} />
           </div>
@@ -505,7 +683,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
         {phase === 'idle' && anonMode && (
           <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
-            Connect Anonymously & Get VPN Config
+            Activate Anonymous Access & Get VPN Config
           </button>
         )}
 
@@ -555,9 +733,15 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                 borderRadius: 8,
                 background: 'var(--card-bg, #1a1a2e)',
               }}>
-                <h3 style={{ marginBottom: 12 }}>Choose Your Plan</h3>
+                <h3 style={{ marginBottom: 12 }}>
+                  {paymentIntent?.kind === 'anon-subscription'
+                    ? 'Choose a Subscription Plan'
+                    : 'Choose Your Plan'}
+                </h3>
                 <p style={{ color: 'var(--muted)', fontSize: '0.85rem', marginBottom: 16 }}>
-                  Paid directly to the smart contract. 80% goes to the node operator, 20% to treasury.
+                  {paymentIntent?.kind === 'anon-subscription'
+                    ? 'Anonymous access requires an active paid subscription on this wallet. After confirmation, the site will retry anonymous activation automatically.'
+                    : 'Paid directly to the smart contract. 80% goes to the node operator, 20% to treasury.'}
                 </p>
 
                 <div className="tier-picker">
@@ -569,7 +753,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                     >
                       <span className="tier-option-label">{opt.label}</span>
                       <span className="tier-option-price">{opt.price} ETH</span>
-                      {opt.key !== '24h' && (
+                      {paymentIntent?.kind !== 'anon-subscription' && opt.key !== '24h' && (
                         <span className="tier-savings">Save vs daily</span>
                       )}
                     </button>
@@ -582,7 +766,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                   disabled={!selectedTier}
                   style={{ marginTop: 16, width: '100%' }}
                 >
-                  {selectedTier ? `Pay & Connect` : 'Select a plan'}
+                  {selectedTier
+                    ? paymentIntent?.kind === 'anon-subscription'
+                      ? 'Buy Subscription & Continue'
+                      : 'Pay & Connect'
+                    : 'Select a plan'}
                 </button>
               </div>
             )}

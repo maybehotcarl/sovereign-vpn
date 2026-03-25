@@ -31,6 +31,15 @@ type Config struct {
 
 	// Rate limiting
 	RateLimitPerMinute int `json:"rate_limit_per_minute"` // Per-IP rate limit
+
+	// Shared state for multi-node deployments
+	RedisURL             string `json:"redis_url"`
+	RedisKeyPrefix       string `json:"redis_key_prefix"`
+	SessionSigningKey    string `json:"session_signing_key"`
+	GatewayInstanceID    string `json:"gateway_instance_id"`
+	GatewayPublicURL     string `json:"gateway_public_url"`
+	GatewayForwardURL    string `json:"gateway_forward_url"`
+	GatewayForwardingKey string `json:"gateway_forwarding_key"`
 }
 
 // DefaultConfig returns a config with sensible defaults for development.
@@ -47,6 +56,7 @@ func DefaultConfig() *Config {
 		CredentialTTL:        24 * time.Hour,
 		EnableFreeTier:       false,
 		RateLimitPerMinute:   30,
+		RedisKeyPrefix:       "sovereign-vpn",
 	}
 }
 
@@ -79,6 +89,12 @@ func (c *Config) Validate() error {
 	}
 	if c.NonceLength < 8 {
 		return fmt.Errorf("nonce_length must be >= 8")
+	}
+	if c.RedisURL != "" && c.SessionSigningKey == "" {
+		return fmt.Errorf("session_signing_key is required when redis_url is configured")
+	}
+	if c.RedisURL != "" && c.GatewayInstanceID == "" {
+		return fmt.Errorf("gateway_instance_id is required when redis_url is configured")
 	}
 	return nil
 }

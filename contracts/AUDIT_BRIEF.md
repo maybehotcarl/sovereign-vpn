@@ -128,7 +128,21 @@ forge build
 forge test -vvv
 ```
 
-## Deployed Addresses (Sepolia — for reference)
+## Historical Address Snapshot
+
+This block is historical context only. It is not the current source of truth
+for mainnet addresses.
+
+For the currently verified mainnet contract surface, use
+`/home/maybe/repos/sovereign-vpn/MAINNET_ADDRESSES.md`.
+
+In particular:
+
+- do not treat the `NodeRegistry` address below as a verified current mainnet deployment
+- do not treat the `PayoutVault` address below as a verified current mainnet deployment
+- do not treat the `AccessPolicy` address below as safe for current mainnet issuer checks
+
+## Deployed Addresses (Historical / Sepolia-era reference)
 
 ```
 TestMemes:           0x98C361b7C385b9589E60B36B880501D66123B294

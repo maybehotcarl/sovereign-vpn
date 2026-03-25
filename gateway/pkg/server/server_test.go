@@ -5,13 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/config"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftgate"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
@@ -42,6 +48,113 @@ func TestParseAddress(t *testing.T) {
 func hexString(b byte) string {
 	const hex = "0123456789abcdef"
 	return string([]byte{hex[b>>4], hex[b&0x0f]})
+}
+
+func newTestWireGuardManager(t *testing.T, endpoint string) *wireguard.Manager {
+	t.Helper()
+
+	dir := t.TempDir()
+	wgPath := filepath.Join(dir, "wg")
+	if err := os.WriteFile(wgPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(wg): %v", err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	manager, err := wireguard.NewManager(wireguard.Config{
+		Interface:       "wg0",
+		ServerPublicKey: "server_public_key",
+		ServerEndpoint:  endpoint,
+		Subnet:          "10.8.0.0/24",
+		DNS:             "1.1.1.1",
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	return manager
+}
+
+func mustTestGate(t *testing.T) *nftgate.Gate {
+	t.Helper()
+
+	gate, err := nftgate.NewGateWithOptions(nil, time.Hour, nftgate.GateOptions{
+		SessionSigningSecret: "test-signing-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewGateWithOptions: %v", err)
+	}
+	return gate
+}
+
+func newAffinityTestServer(t *testing.T, instanceID string, publicURL string) (*Server, *nftgate.Gate, *nftgate.Session) {
+	t.Helper()
+
+	gate, err := nftgate.NewGateWithOptions(nil, time.Hour, nftgate.GateOptions{
+		SessionSigningSecret: "test-signing-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewGateWithOptions: %v", err)
+	}
+
+	session, err := gate.CreateSessionWithError(
+		common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
+		nftcheck.TierFree,
+	)
+	if err != nil {
+		t.Fatalf("CreateSessionWithError: %v", err)
+	}
+
+	s := &Server{
+		cfg: &config.Config{
+			ListenAddr:        ":8080",
+			GatewayInstanceID: instanceID,
+			GatewayPublicURL:  publicURL,
+			GatewayForwardURL: publicURL,
+		},
+		gate:       gate,
+		wg:         newTestWireGuardManager(t, "vpn.example.com:51820"),
+		peerOwners: newLocalPeerOwnershipStore(),
+		peerStates: newLocalPeerStateStore(),
+	}
+	return s, gate, session
+}
+
+func newDeadOwnerRecoveryServer(t *testing.T, deadOwnerID string, deadOwnerURL string) (*Server, *nftgate.Gate, *nftgate.Session) {
+	t.Helper()
+
+	gate, err := nftgate.NewGateWithOptions(nil, time.Hour, nftgate.GateOptions{
+		SessionSigningSecret: "test-signing-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewGateWithOptions: %v", err)
+	}
+
+	session, err := gate.CreateSessionWithError(
+		common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
+		nftcheck.TierFree,
+	)
+	if err != nil {
+		t.Fatalf("CreateSessionWithError: %v", err)
+	}
+	if _, _, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: deadOwnerID,
+		PublicURL:  deadOwnerURL,
+	}); err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+
+	return &Server{
+		cfg: &config.Config{
+			ListenAddr:        ":8081",
+			GatewayInstanceID: "gw-b",
+			GatewayPublicURL:  "https://gw-b.example.com",
+		},
+		gate:                  gate,
+		wg:                    newTestWireGuardManager(t, "vpn.example.com:51820"),
+		peerOwners:            newLocalPeerOwnershipStore(),
+		peerStates:            newLocalPeerStateStore(),
+		gatewayPresence:       newLocalGatewayPresenceStore(),
+		gatewayPresenceShared: true,
+	}, gate, session
 }
 
 func TestWriteJSON(t *testing.T) {
@@ -153,6 +266,582 @@ func TestBearerTokenRejectsMalformedHeader(t *testing.T) {
 		if got := bearerToken(req); got != "" {
 			t.Fatalf("bearerToken(%q) = %q, want empty", header, got)
 		}
+	}
+}
+
+func TestHandleVPNConnectBindsGatewayOwner(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-a", "https://gw-a.example.com")
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_1"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNConnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp ConnectResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.GatewayInstanceID != "gw-a" {
+		t.Fatalf("GatewayInstanceID = %q, want gw-a", resp.GatewayInstanceID)
+	}
+	if resp.GatewayURL != "https://gw-a.example.com" {
+		t.Fatalf("GatewayURL = %q, want https://gw-a.example.com", resp.GatewayURL)
+	}
+	if s.wg.PeerCount() != 1 {
+		t.Fatalf("PeerCount = %d, want 1", s.wg.PeerCount())
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.GatewayInstanceID != "gw-a" {
+		t.Fatalf("stored session gateway = %q, want gw-a", stored.GatewayInstanceID)
+	}
+}
+
+func TestHandleVPNConnectRejectsWrongGatewayOwner(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-b", "https://gw-b.example.com")
+
+	_, newlyBound, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	if !newlyBound {
+		t.Fatal("expected pre-bind to set owner")
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_2"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNConnect(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp["code"] != "session_bound_to_other_gateway" {
+		t.Fatalf("code = %v, want session_bound_to_other_gateway", resp["code"])
+	}
+	if resp["gateway_instance_id"] != "gw-a" {
+		t.Fatalf("gateway_instance_id = %v, want gw-a", resp["gateway_instance_id"])
+	}
+	if resp["gateway_url"] != "https://gw-a.example.com" {
+		t.Fatalf("gateway_url = %v, want https://gw-a.example.com", resp["gateway_url"])
+	}
+	if s.wg.PeerCount() != 0 {
+		t.Fatalf("PeerCount = %d, want 0", s.wg.PeerCount())
+	}
+}
+
+func TestHandleVPNDisconnectRejectsWrongGatewayOwner(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-b", "https://gw-b.example.com")
+
+	_, newlyBound, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	if !newlyBound {
+		t.Fatal("expected pre-bind to set owner")
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_2"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/disconnect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNDisconnect(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp["code"] != "session_bound_to_other_gateway" {
+		t.Fatalf("code = %v, want session_bound_to_other_gateway", resp["code"])
+	}
+	if resp["gateway_instance_id"] != "gw-a" {
+		t.Fatalf("gateway_instance_id = %v, want gw-a", resp["gateway_instance_id"])
+	}
+}
+
+func TestHandleVPNStatusIncludesGatewayAffinity(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-b", "https://gw-b.example.com")
+
+	_, newlyBound, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	if !newlyBound {
+		t.Fatal("expected pre-bind to set owner")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/vpn/status", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	rec := httptest.NewRecorder()
+
+	s.handleVPNStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if connected, ok := resp["connected"].(bool); !ok || !connected {
+		t.Fatalf("connected = %v, want true", resp["connected"])
+	}
+	if affinityOK, ok := resp["gateway_affinity_ok"].(bool); !ok || affinityOK {
+		t.Fatalf("gateway_affinity_ok = %v, want false", resp["gateway_affinity_ok"])
+	}
+	if resp["gateway_instance_id"] != "gw-a" {
+		t.Fatalf("gateway_instance_id = %v, want gw-a", resp["gateway_instance_id"])
+	}
+	if resp["gateway_url"] != "https://gw-a.example.com" {
+		t.Fatalf("gateway_url = %v, want https://gw-a.example.com", resp["gateway_url"])
+	}
+}
+
+func TestRecoverOwnedPeersRestoresWireGuardState(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-a", "https://gw-a.example.com")
+	expiresAt := time.Now().Add(30 * time.Minute).UTC()
+
+	if _, _, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+	}); err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	if err := s.peerStates.Put(&peerState{
+		PublicKey:         "wg_pub_recover",
+		SessionID:         session.ID,
+		GatewayInstanceID: "gw-a",
+		GatewayURL:        "https://gw-a.example.com",
+		ClientIP:          "10.8.0.44",
+		AssignedAt:        time.Now().Add(-time.Minute).UTC(),
+		ExpiresAt:         expiresAt,
+	}); err != nil {
+		t.Fatalf("peerStates.Put: %v", err)
+	}
+
+	if err := s.recoverOwnedPeers(); err != nil {
+		t.Fatalf("recoverOwnedPeers: %v", err)
+	}
+
+	peer := s.wg.GetPeer("wg_pub_recover")
+	if peer == nil {
+		t.Fatal("expected peer to be recovered")
+	}
+	if peer.ClientIP != "10.8.0.44" {
+		t.Fatalf("ClientIP = %q, want 10.8.0.44", peer.ClientIP)
+	}
+}
+
+func TestHandleVPNDisconnectRecoversPeerStateOnDemand(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-a", "https://gw-a.example.com")
+	expiresAt := time.Now().Add(30 * time.Minute).UTC()
+
+	if _, _, err := gate.BindSessionGateway(session.ID, nftgate.GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+	}); err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	reserved, err := s.peerOwners.Reserve("wg_pub_recover_disconnect", session.ID, "gw-a", expiresAt)
+	if err != nil {
+		t.Fatalf("peerOwners.Reserve: %v", err)
+	}
+	if !reserved {
+		t.Fatal("expected peer owner reservation to succeed")
+	}
+	if err := s.peerStates.Put(&peerState{
+		PublicKey:         "wg_pub_recover_disconnect",
+		SessionID:         session.ID,
+		GatewayInstanceID: "gw-a",
+		GatewayURL:        "https://gw-a.example.com",
+		ClientIP:          "10.8.0.45",
+		AssignedAt:        time.Now().Add(-time.Minute).UTC(),
+		ExpiresAt:         expiresAt,
+	}); err != nil {
+		t.Fatalf("peerStates.Put: %v", err)
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_recover_disconnect"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/disconnect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNDisconnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if s.wg.GetPeer("wg_pub_recover_disconnect") != nil {
+		t.Fatal("expected recovered peer to be removed")
+	}
+	stored, err := s.peerStates.Get("wg_pub_recover_disconnect")
+	if err != nil {
+		t.Fatalf("peerStates.Get: %v", err)
+	}
+	if stored != nil {
+		t.Fatal("expected peer state to be deleted after disconnect")
+	}
+}
+
+func TestHandleVPNDisconnectForwardsToOwnerGateway(t *testing.T) {
+	sharedGate, err := nftgate.NewGateWithOptions(nil, time.Hour, nftgate.GateOptions{
+		SessionSigningSecret: "test-signing-secret",
+	})
+	if err != nil {
+		t.Fatalf("NewGateWithOptions: %v", err)
+	}
+	session, err := sharedGate.CreateSessionWithError(
+		common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678"),
+		nftcheck.TierFree,
+	)
+	if err != nil {
+		t.Fatalf("CreateSessionWithError: %v", err)
+	}
+
+	owner := &Server{
+		cfg: &config.Config{
+			ListenAddr:           ":8080",
+			GatewayInstanceID:    "gw-a",
+			GatewayForwardingKey: "forward-secret",
+		},
+		gate:       sharedGate,
+		wg:         newTestWireGuardManager(t, "vpn.example.com:51820"),
+		peerOwners: newLocalPeerOwnershipStore(),
+		peerStates: newLocalPeerStateStore(),
+	}
+	ownerMux := http.NewServeMux()
+	ownerMux.HandleFunc("POST /internal/forward/vpn/disconnect", owner.handleInternalForwardVPNDisconnect)
+	ownerTS := httptest.NewServer(ownerMux)
+	defer ownerTS.Close()
+	owner.cfg.GatewayPublicURL = "https://gw-a.example.com"
+	owner.cfg.GatewayForwardURL = ownerTS.URL
+
+	connectReq := httptest.NewRequest(
+		http.MethodPost,
+		"/vpn/connect",
+		strings.NewReader(`{"session_token":"`+session.Token+`","public_key":"wg_pub_forwarded"}`),
+	)
+	connectReq.Header.Set("Content-Type", "application/json")
+	connectRec := httptest.NewRecorder()
+	owner.handleVPNConnect(connectRec, connectReq)
+	if connectRec.Code != http.StatusOK {
+		t.Fatalf("owner connect expected 200, got %d", connectRec.Code)
+	}
+
+	proxy := &Server{
+		cfg: &config.Config{
+			ListenAddr:           ":8081",
+			GatewayInstanceID:    "gw-b",
+			GatewayPublicURL:     "https://gw-b.example.com",
+			GatewayForwardURL:    "http://gw-b.internal:8080",
+			GatewayForwardingKey: "forward-secret",
+		},
+		gate:              sharedGate,
+		wg:                newTestWireGuardManager(t, "vpn.example.com:51820"),
+		peerOwners:        newLocalPeerOwnershipStore(),
+		peerStates:        newLocalPeerStateStore(),
+		forwardHTTPClient: ownerTS.Client(),
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_forwarded"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/disconnect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	proxy.handleVPNDisconnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if owner.wg.PeerCount() != 0 {
+		t.Fatalf("owner PeerCount = %d, want 0", owner.wg.PeerCount())
+	}
+}
+
+func TestHandleHealthIncludesGatewayMetadata(t *testing.T) {
+	s := &Server{
+		cfg: &config.Config{
+			ListenAddr:        ":8080",
+			GatewayInstanceID: "gw-a",
+			GatewayPublicURL:  "https://gw-a.example.com",
+			GatewayForwardURL: "http://gw-a.internal:8080",
+		},
+		gate:       mustTestGate(t),
+		wg:         newTestWireGuardManager(t, "vpn.example.com:51820"),
+		peerOwners: newLocalPeerOwnershipStore(),
+		peerStates: newLocalPeerStateStore(),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if resp["gateway_instance_id"] != "gw-a" {
+		t.Fatalf("gateway_instance_id = %v, want gw-a", resp["gateway_instance_id"])
+	}
+	if resp["gateway_public_url"] != "https://gw-a.example.com" {
+		t.Fatalf("gateway_public_url = %v, want https://gw-a.example.com", resp["gateway_public_url"])
+	}
+	forwarding, ok := resp["forwarding"].(map[string]any)
+	if !ok {
+		t.Fatalf("forwarding block missing or invalid: %#v", resp["forwarding"])
+	}
+	if forwarding["forward_target_configured"] != true {
+		t.Fatalf("forwarding.forward_target_configured = %v, want true", forwarding["forward_target_configured"])
+	}
+}
+
+func TestHandleVPNConnectTakesOverDeadGatewayOwner(t *testing.T) {
+	s, gate, session := newDeadOwnerRecoveryServer(t, "gw-a", "https://gw-a.example.com")
+	expiresAt := time.Now().Add(30 * time.Minute).UTC()
+
+	reserved, err := s.peerOwners.Reserve("wg_pub_dead_owner", session.ID, "gw-a", expiresAt)
+	if err != nil {
+		t.Fatalf("peerOwners.Reserve: %v", err)
+	}
+	if !reserved {
+		t.Fatal("expected old peer reservation to succeed")
+	}
+	if err := s.peerStates.Put(&peerState{
+		PublicKey:         "wg_pub_dead_owner",
+		SessionID:         session.ID,
+		GatewayInstanceID: "gw-a",
+		GatewayURL:        "https://gw-a.example.com",
+		ClientIP:          "10.8.0.12",
+		AssignedAt:        time.Now().Add(-time.Minute).UTC(),
+		ExpiresAt:         expiresAt,
+	}); err != nil {
+		t.Fatalf("peerStates.Put: %v", err)
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_new_owner"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNConnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp ConnectResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if resp.GatewayInstanceID != "gw-b" {
+		t.Fatalf("GatewayInstanceID = %q, want gw-b", resp.GatewayInstanceID)
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.GatewayInstanceID != "gw-b" {
+		t.Fatalf("stored session gateway = %q, want gw-b", stored.GatewayInstanceID)
+	}
+
+	state, err := s.peerStates.Get("wg_pub_dead_owner")
+	if err != nil {
+		t.Fatalf("peerStates.Get: %v", err)
+	}
+	if state != nil {
+		t.Fatal("expected dead owner peer state to be removed during takeover")
+	}
+	owned, err := s.peerOwnedBy("wg_pub_dead_owner", session.ID)
+	if err != nil {
+		t.Fatalf("peerOwnedBy: %v", err)
+	}
+	if owned {
+		t.Fatal("expected dead owner peer reservation to be released during takeover")
+	}
+	if s.wg.GetPeer("wg_pub_new_owner") == nil {
+		t.Fatal("expected new peer to be provisioned on takeover gateway")
+	}
+}
+
+func TestHandleVPNConnectClearsDeadGatewayReservationWithoutPeerState(t *testing.T) {
+	s, gate, session := newDeadOwnerRecoveryServer(t, "gw-a", "https://gw-a.example.com")
+	expiresAt := time.Now().Add(30 * time.Minute).UTC()
+
+	reserved, err := s.peerOwners.Reserve("wg_pub_stale_only", session.ID, "gw-a", expiresAt)
+	if err != nil {
+		t.Fatalf("peerOwners.Reserve: %v", err)
+	}
+	if !reserved {
+		t.Fatal("expected stale peer reservation to succeed")
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_new_after_stale"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/connect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNConnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.GatewayInstanceID != "gw-b" {
+		t.Fatalf("stored session gateway = %q, want gw-b", stored.GatewayInstanceID)
+	}
+
+	owned, err := s.peerOwnedBy("wg_pub_stale_only", session.ID)
+	if err != nil {
+		t.Fatalf("peerOwnedBy: %v", err)
+	}
+	if owned {
+		t.Fatal("expected stale reservation without peer state to be released during takeover")
+	}
+}
+
+func TestHandleVPNDisconnectClearsDeadGatewayOwner(t *testing.T) {
+	s, gate, session := newDeadOwnerRecoveryServer(t, "gw-a", "https://gw-a.example.com")
+	expiresAt := time.Now().Add(30 * time.Minute).UTC()
+
+	reserved, err := s.peerOwners.Reserve("wg_pub_dead_disconnect", session.ID, "gw-a", expiresAt)
+	if err != nil {
+		t.Fatalf("peerOwners.Reserve: %v", err)
+	}
+	if !reserved {
+		t.Fatal("expected old peer reservation to succeed")
+	}
+	if err := s.peerStates.Put(&peerState{
+		PublicKey:         "wg_pub_dead_disconnect",
+		SessionID:         session.ID,
+		GatewayInstanceID: "gw-a",
+		GatewayURL:        "https://gw-a.example.com",
+		ClientIP:          "10.8.0.13",
+		AssignedAt:        time.Now().Add(-time.Minute).UTC(),
+		ExpiresAt:         expiresAt,
+	}); err != nil {
+		t.Fatalf("peerStates.Put: %v", err)
+	}
+
+	body := `{"session_token":"` + session.Token + `","public_key":"wg_pub_dead_disconnect"}`
+	req := httptest.NewRequest(http.MethodPost, "/vpn/disconnect", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	s.handleVPNDisconnect(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if recovered, ok := resp["recovered"].(bool); !ok || !recovered {
+		t.Fatalf("recovered = %v, want true", resp["recovered"])
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.GatewayInstanceID != "" {
+		t.Fatalf("stored session gateway = %q, want empty", stored.GatewayInstanceID)
+	}
+
+	state, err := s.peerStates.Get("wg_pub_dead_disconnect")
+	if err != nil {
+		t.Fatalf("peerStates.Get: %v", err)
+	}
+	if state != nil {
+		t.Fatal("expected dead owner peer state to be removed during disconnect recovery")
+	}
+	owned, err := s.peerOwnedBy("wg_pub_dead_disconnect", session.ID)
+	if err != nil {
+		t.Fatalf("peerOwnedBy: %v", err)
+	}
+	if owned {
+		t.Fatal("expected dead owner peer reservation to be released during disconnect recovery")
+	}
+}
+
+func TestHandleVPNStatusReportsDeadGatewayOwnerRecoverable(t *testing.T) {
+	s, gate, session := newDeadOwnerRecoveryServer(t, "gw-a", "https://gw-a.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/vpn/status", nil)
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	rec := httptest.NewRecorder()
+
+	s.handleVPNStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("Decode response: %v", err)
+	}
+	if connected, ok := resp["connected"].(bool); !ok || connected {
+		t.Fatalf("connected = %v, want false", resp["connected"])
+	}
+	if resp["code"] != "gateway_owner_unavailable" {
+		t.Fatalf("code = %v, want gateway_owner_unavailable", resp["code"])
+	}
+	if recoverable, ok := resp["recoverable"].(bool); !ok || !recoverable {
+		t.Fatalf("recoverable = %v, want true", resp["recoverable"])
+	}
+	if resp["previous_gateway_instance_id"] != "gw-a" {
+		t.Fatalf("previous_gateway_instance_id = %v, want gw-a", resp["previous_gateway_instance_id"])
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.GatewayInstanceID != "" {
+		t.Fatalf("stored session gateway = %q, want empty", stored.GatewayInstanceID)
 	}
 }
 

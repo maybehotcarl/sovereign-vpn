@@ -22,6 +22,7 @@ import (
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/ratelimit"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/rep6529"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sessionmgr"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/sharedredis"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/subscriptionmgr"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/wireguard"
@@ -36,53 +37,132 @@ const (
 
 // Server is the Sovereign VPN gateway.
 type Server struct {
-	cfg                 *config.Config
-	anonAuth            *anonauth.Service
-	freeTier            bool
-	siwe                *siwe.Service
-	checker             nftcheck.AccessChecker
-	gate                *nftgate.Gate
-	wg                  *wireguard.Manager
-	registry            *noderegistry.Registry
-	userRep             *rep6529.Checker
-	sessionMgr          *sessionmgr.Manager
-	subMgr              *subscriptionmgr.Manager
-	zkClient            *zkverify.Client
-	payoutVault         *payoutvault.Client
-	thisCardID          int64
-	peerMu              sync.RWMutex
-	peerOwners          map[string]string
-	policyMu            sync.RWMutex
-	policyFetchMu       sync.Mutex
-	policyRoot          string
-	policyFetchedAt     time.Time
-	policyRefreshQueued bool
-	mux                 *http.ServeMux
-	corsOrigin          string
-	limiter             *ratelimit.Limiter
+	cfg                   *config.Config
+	anonAuth              *anonauth.Service
+	freeTier              bool
+	siwe                  *siwe.Service
+	checker               nftcheck.AccessChecker
+	gate                  *nftgate.Gate
+	wg                    *wireguard.Manager
+	registry              *noderegistry.Registry
+	userRep               *rep6529.Checker
+	sessionMgr            *sessionmgr.Manager
+	subMgr                *subscriptionmgr.Manager
+	zkClient              *zkverify.Client
+	payoutVault           *payoutvault.Client
+	thisCardID            int64
+	peerOwners            peerOwnershipStore
+	policyMu              sync.RWMutex
+	policyFetchMu         sync.Mutex
+	policyRoot            string
+	policyFetchedAt       time.Time
+	policyRefreshQueued   bool
+	mux                   *http.ServeMux
+	corsOrigin            string
+	limiter               *ratelimit.Limiter
+	sharedState           *sharedredis.Store
+	peerStates            peerStateStore
+	forwardHTTPClient     *http.Client
+	gatewayPresence       gatewayPresenceStore
+	gatewayPresenceShared bool
+	gatewayPresenceStopCh chan struct{}
 }
 
 // New creates a new gateway server.
-func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manager) *Server {
-	gate := nftgate.NewGate(checker, cfg.CredentialTTL)
+func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manager) (*Server, error) {
+	var (
+		err         error
+		sharedState *sharedredis.Store
+		gate        *nftgate.Gate
+		anonAuthSvc *anonauth.Service
+		siweSvc     *siwe.Service
+		limiter     *ratelimit.Limiter
+		peerOwners  peerOwnershipStore
+		peerStates  peerStateStore
+		presence    gatewayPresenceStore
+	)
 
-	var limiter *ratelimit.Limiter
-	if cfg.RateLimitPerMinute > 0 {
-		limiter = ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+	if strings.TrimSpace(cfg.RedisURL) != "" {
+		sharedState, err = sharedredis.New(cfg.RedisURL, cfg.RedisKeyPrefix)
+		if err != nil {
+			return nil, fmt.Errorf("initializing shared redis state: %w", err)
+		}
+		if err := sharedState.Client().Ping(context.Background()).Err(); err != nil {
+			_ = sharedState.Close()
+			return nil, fmt.Errorf("connecting to shared redis state: %w", err)
+		}
+		if strings.TrimSpace(cfg.SessionSigningKey) == "" {
+			_ = sharedState.Close()
+			return nil, fmt.Errorf("session_signing_key is required when redis shared state is enabled")
+		}
+		if strings.TrimSpace(cfg.GatewayInstanceID) == "" {
+			_ = sharedState.Close()
+			return nil, fmt.Errorf("gateway_instance_id is required when redis shared state is enabled")
+		}
+		gate, err = nftgate.NewGateWithOptions(checker, cfg.CredentialTTL, nftgate.GateOptions{
+			SessionStore:         nftgate.NewRedisSessionStore(sharedState),
+			SessionSigningSecret: cfg.SessionSigningKey,
+		})
+		if err != nil {
+			_ = sharedState.Close()
+			return nil, err
+		}
+		anonAuthSvc = anonauth.NewServiceWithBackends(
+			cfg.ChallengeTTL,
+			cfg.NonceLength,
+			"vpn_access_v1",
+			1,
+			anonauth.NewRedisChallengeBackend(sharedState),
+			anonauth.NewRedisNullifierBackend(sharedState),
+		)
+		siweSvc = siwe.NewServiceWithNonceStore(
+			cfg.SIWEDomain,
+			cfg.SIWEUri,
+			cfg.ChallengeTTL,
+			siwe.NewRedisNonceBackend(sharedState, cfg.ChallengeTTL),
+		)
+		if cfg.RateLimitPerMinute > 0 {
+			limiter = ratelimit.NewRedis(sharedState, cfg.RateLimitPerMinute, time.Minute)
+		}
+		peerOwners = newRedisPeerOwnershipStore(sharedState)
+		peerStates = newRedisPeerStateStore(sharedState)
+		presence = newRedisGatewayPresenceStore(sharedState)
+	} else {
+		gate = nftgate.NewGate(checker, cfg.CredentialTTL)
+		anonAuthSvc = anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1)
+		siweSvc = siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength)
+		if cfg.RateLimitPerMinute > 0 {
+			limiter = ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+		}
+		peerOwners = newLocalPeerOwnershipStore()
+		peerStates = newLocalPeerStateStore()
+		presence = newLocalGatewayPresenceStore()
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		anonAuth:   anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1),
-		freeTier:   cfg.EnableFreeTier,
-		siwe:       siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
-		checker:    checker,
-		gate:       gate,
-		wg:         wg,
-		peerOwners: make(map[string]string),
-		mux:        http.NewServeMux(),
-		limiter:    limiter,
+		cfg:                   cfg,
+		anonAuth:              anonAuthSvc,
+		freeTier:              cfg.EnableFreeTier,
+		siwe:                  siweSvc,
+		checker:               checker,
+		gate:                  gate,
+		wg:                    wg,
+		peerOwners:            peerOwners,
+		mux:                   http.NewServeMux(),
+		limiter:               limiter,
+		sharedState:           sharedState,
+		peerStates:            peerStates,
+		gatewayPresence:       presence,
+		gatewayPresenceShared: sharedState != nil,
+		forwardHTTPClient: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
+
+	// Internal forwarded owner-node endpoints
+	s.mux.HandleFunc("POST /internal/forward/vpn/connect", s.handleInternalForwardVPNConnect)
+	s.mux.HandleFunc("POST /internal/forward/vpn/disconnect", s.handleInternalForwardVPNDisconnect)
+	s.mux.HandleFunc("GET /internal/forward/vpn/status", s.handleInternalForwardVPNStatus)
 
 	// Public endpoints (no session required)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
@@ -109,7 +189,16 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	// Payout status (public — returns pending payout + 0zk address for an operator)
 	s.mux.HandleFunc("GET /payout/status", s.handlePayoutStatus)
 
-	return s
+	if err := s.recoverOwnedPeers(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	if err := s.startGatewayPresenceHeartbeat(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // SetChainID sets the expected chain ID for SIWE verification.
@@ -150,6 +239,18 @@ func (s *Server) SetZKClient(c *zkverify.Client) {
 // SetPayoutVault configures the PayoutVault client for payout status queries.
 func (s *Server) SetPayoutVault(c *payoutvault.Client) {
 	s.payoutVault = c
+}
+
+// Close releases shared resources owned by the server.
+func (s *Server) Close() error {
+	if s.limiter != nil {
+		s.limiter.Stop()
+	}
+	s.stopGatewayPresenceHeartbeat()
+	if s.sharedState != nil {
+		return s.sharedState.Close()
+	}
+	return nil
 }
 
 // SetThisCardID configures the token ID that grants free tier via ZK proof.
@@ -205,13 +306,39 @@ func (s *Server) ListenAndServe() error {
 
 // GET /health
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":            "ok",
-		"time":              time.Now().UTC(),
-		"active_sessions":   s.gate.ActiveSessionCount(),
-		"active_peers":      s.wg.PeerCount(),
-		"free_tier_enabled": s.freeTier,
-	})
+	activeSessions, err := s.gate.ActiveSessionCountWithError()
+	if err != nil {
+		log.Printf("Error reading active session count: %v", err)
+		activeSessions = -1
+	}
+
+	resp := map[string]any{
+		"status":              "ok",
+		"time":                time.Now().UTC(),
+		"active_sessions":     activeSessions,
+		"active_peers":        s.wg.PeerCount(),
+		"free_tier_enabled":   s.freeTier,
+		"gateway_instance_id": s.currentGatewayInstanceID(),
+		"gateway_public_url":  s.currentGatewayPublicURL(),
+		"shared_state": map[string]any{
+			"enabled": s.sharedState != nil,
+		},
+		"forwarding": map[string]any{
+			"enabled":                   s.forwardingEnabled(),
+			"forward_target_configured": s.currentGatewayForwardURL() != "",
+		},
+	}
+	if s.sharedState != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		err := s.sharedState.Client().Ping(ctx).Err()
+		resp["shared_state"].(map[string]any)["status"] = map[bool]string{true: "ok", false: "error"}[err == nil]
+		if err != nil {
+			log.Printf("Error pinging shared redis state: %v", err)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ChallengeResponse is returned by POST /auth/challenge.
@@ -399,8 +526,9 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 4: Create a session
-	session := s.gate.CreateSession(auth.Address, result.Tier)
-	if session == nil {
+	session, err := s.gate.CreateSessionWithError(auth.Address, result.Tier)
+	if err != nil {
+		log.Printf("Error creating session: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
@@ -501,13 +629,15 @@ type AnonymousConnectRequest struct {
 
 // ConnectResponse is returned by POST /vpn/connect.
 type ConnectResponse struct {
-	ServerPublicKey string `json:"server_public_key"`
-	ServerEndpoint  string `json:"server_endpoint"`
-	ClientAddress   string `json:"client_address"`
-	DNS             string `json:"dns"`
-	AllowedIPs      string `json:"allowed_ips"`
-	ExpiresAt       string `json:"expires_at"`
-	Tier            string `json:"tier"`
+	ServerPublicKey   string `json:"server_public_key"`
+	ServerEndpoint    string `json:"server_endpoint"`
+	ClientAddress     string `json:"client_address"`
+	DNS               string `json:"dns"`
+	AllowedIPs        string `json:"allowed_ips"`
+	ExpiresAt         string `json:"expires_at"`
+	Tier              string `json:"tier"`
+	GatewayInstanceID string `json:"gateway_instance_id,omitempty"`
+	GatewayURL        string `json:"gateway_url,omitempty"`
 }
 
 // POST /vpn/connect -- provision a WireGuard peer for an authenticated session
@@ -525,19 +655,74 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate session
-	session := s.gate.GetSessionByToken(req.SessionToken)
-	if session == nil {
-		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
+	session, err := s.gate.GetSessionByTokenWithError(req.SessionToken)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
 		return
 	}
-	if !s.claimsPeer(req.PublicKey, session.ID) {
-		writeError(w, http.StatusForbidden, "public key is already bound to another session")
+	if session == nil {
+		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
 		return
 	}
 
 	if session.Tier == nftcheck.TierDenied {
 		writeError(w, http.StatusForbidden, "access denied")
 		return
+	}
+
+	gatewayBoundNow := false
+	if session.GatewayInstanceID != "" && !s.sessionOwnedByCurrentGateway(session) {
+		ownerState, err := s.gatewayOwnerState(session)
+		if err != nil {
+			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
+			return
+		}
+		switch ownerState {
+		case gatewayOwnerStateDead:
+			session, gatewayBoundNow, err = s.takeoverDeadSession(session)
+			if err != nil {
+				log.Printf("Error taking over dead gateway session %s: %v", session.ID, err)
+				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
+				return
+			}
+		default:
+			if s.tryForwardConnectToOwner(w, r, session, req) {
+				return
+			}
+			s.writeGatewayAffinityConflict(w, session)
+			return
+		}
+	}
+	if session == nil {
+		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
+		return
+	}
+	if session.GatewayInstanceID == "" {
+		session, gatewayBoundNow, err = s.gate.BindSessionGateway(session.ID, s.currentGatewayIdentity())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
+			return
+		}
+		if session == nil {
+			writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
+			return
+		}
+	}
+	if !s.sessionOwnedByCurrentGateway(session) {
+		if s.tryForwardConnectToOwner(w, r, session, req) {
+			return
+		}
+		s.writeGatewayAffinityConflict(w, session)
+		return
+	}
+	releaseGatewayBinding := func() {
+		if !gatewayBoundNow {
+			return
+		}
+		if err := s.gate.ReleaseSessionGateway(session.ID, s.currentGatewayInstanceID()); err != nil {
+			log.Printf("Warning: failed to release gateway affinity for session %s: %v", session.ID, err)
+		}
 	}
 
 	// For paid tier, check subscription first, then fall back to 24h session
@@ -547,24 +732,36 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 			sub, err := s.subMgr.GetSubscription(r.Context(), session.Address)
 			if err == nil && sub.ExpiresAt > uint64(time.Now().Unix()) {
 				remaining := time.Duration(sub.ExpiresAt-uint64(time.Now().Unix())) * time.Second
+				expiresAt := time.Now().Add(remaining)
+				reserved, err := s.reservePeer(req.PublicKey, session.ID, expiresAt)
+				if err != nil {
+					releaseGatewayBinding()
+					writeError(w, http.StatusServiceUnavailable, "peer reservation backend unavailable")
+					return
+				}
+				if !reserved {
+					releaseGatewayBinding()
+					writeError(w, http.StatusForbidden, "public key is already bound to another session")
+					return
+				}
 				peerCfg, err := s.wg.AddPeer(req.PublicKey, remaining)
 				if err != nil {
+					_ = s.deletePeerOwner(req.PublicKey)
+					releaseGatewayBinding()
 					log.Printf("Error adding WireGuard peer: %v", err)
 					writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
 					return
 				}
-				expiresAt := time.Now().Add(remaining)
-				s.setPeerOwner(req.PublicKey, session.ID)
 				log.Printf("VPN connected (subscription): remaining=%s", remaining)
-				writeJSON(w, http.StatusOK, ConnectResponse{
-					ServerPublicKey: peerCfg.ServerPublicKey,
-					ServerEndpoint:  peerCfg.ServerEndpoint,
-					ClientAddress:   peerCfg.ClientAddress,
-					DNS:             peerCfg.DNS,
-					AllowedIPs:      peerCfg.AllowedIPs,
-					ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
-					Tier:            "subscription",
-				})
+				if err := s.recordPeerState(session.ID, req.PublicKey, peerCfg.ClientAddress, expiresAt); err != nil {
+					_ = s.wg.RemovePeer(req.PublicKey)
+					_ = s.deletePeerOwner(req.PublicKey)
+					releaseGatewayBinding()
+					log.Printf("Error persisting peer state: %v", err)
+					writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
+					return
+				}
+				writeJSON(w, http.StatusOK, s.connectResponse(peerCfg, expiresAt, "subscription"))
 				return
 			}
 		}
@@ -575,53 +772,77 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 			if err == nil && sessionID != 0 {
 				onChain, err := s.sessionMgr.GetSession(r.Context(), sessionID)
 				if err == nil && onChain.Payment.Sign() > 0 {
+					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
+					reserved, err := s.reservePeer(req.PublicKey, session.ID, expiresAt)
+					if err != nil {
+						releaseGatewayBinding()
+						writeError(w, http.StatusServiceUnavailable, "peer reservation backend unavailable")
+						return
+					}
+					if !reserved {
+						releaseGatewayBinding()
+						writeError(w, http.StatusForbidden, "public key is already bound to another session")
+						return
+					}
 					peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Duration(onChain.Duration)*time.Second)
 					if err != nil {
+						_ = s.deletePeerOwner(req.PublicKey)
+						releaseGatewayBinding()
 						log.Printf("Error adding WireGuard peer: %v", err)
 						writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
 						return
 					}
-					expiresAt := time.Now().Add(time.Duration(onChain.Duration) * time.Second)
-					s.setPeerOwner(req.PublicKey, session.ID)
 					log.Printf("VPN connected (paid): duration=%ds", onChain.Duration)
-					writeJSON(w, http.StatusOK, ConnectResponse{
-						ServerPublicKey: peerCfg.ServerPublicKey,
-						ServerEndpoint:  peerCfg.ServerEndpoint,
-						ClientAddress:   peerCfg.ClientAddress,
-						DNS:             peerCfg.DNS,
-						AllowedIPs:      peerCfg.AllowedIPs,
-						ExpiresAt:       expiresAt.UTC().Format(time.RFC3339),
-						Tier:            session.Tier.String(),
-					})
+					if err := s.recordPeerState(session.ID, req.PublicKey, peerCfg.ClientAddress, expiresAt); err != nil {
+						_ = s.wg.RemovePeer(req.PublicKey)
+						_ = s.deletePeerOwner(req.PublicKey)
+						releaseGatewayBinding()
+						log.Printf("Error persisting peer state: %v", err)
+						writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
+						return
+					}
+					writeJSON(w, http.StatusOK, s.connectResponse(peerCfg, expiresAt, session.Tier.String()))
 					return
 				}
 			}
 		}
 
+		releaseGatewayBinding()
 		writeError(w, http.StatusPaymentRequired, "on-chain payment required for paid tier")
 		return
 	}
 
 	// Provision WireGuard peer (free tier or no session manager)
+	reserved, err := s.reservePeer(req.PublicKey, session.ID, session.ExpiresAt)
+	if err != nil {
+		releaseGatewayBinding()
+		writeError(w, http.StatusServiceUnavailable, "peer reservation backend unavailable")
+		return
+	}
+	if !reserved {
+		releaseGatewayBinding()
+		writeError(w, http.StatusForbidden, "public key is already bound to another session")
+		return
+	}
 	peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Until(session.ExpiresAt))
 	if err != nil {
+		_ = s.deletePeerOwner(req.PublicKey)
+		releaseGatewayBinding()
 		log.Printf("Error adding WireGuard peer: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
 		return
 	}
 
 	log.Printf("VPN connected: tier=%s", session.Tier)
-	s.setPeerOwner(req.PublicKey, session.ID)
-
-	writeJSON(w, http.StatusOK, ConnectResponse{
-		ServerPublicKey: peerCfg.ServerPublicKey,
-		ServerEndpoint:  peerCfg.ServerEndpoint,
-		ClientAddress:   peerCfg.ClientAddress,
-		DNS:             peerCfg.DNS,
-		AllowedIPs:      peerCfg.AllowedIPs,
-		ExpiresAt:       session.ExpiresAt.UTC().Format(time.RFC3339),
-		Tier:            session.Tier.String(),
-	})
+	if err := s.recordPeerState(session.ID, req.PublicKey, peerCfg.ClientAddress, session.ExpiresAt); err != nil {
+		_ = s.wg.RemovePeer(req.PublicKey)
+		_ = s.deletePeerOwner(req.PublicKey)
+		releaseGatewayBinding()
+		log.Printf("Error persisting peer state: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.connectResponse(peerCfg, session.ExpiresAt, session.Tier.String()))
 }
 
 // POST /vpn/anonymous/connect -- provision a WireGuard peer for an anonymous authenticated session.
@@ -636,7 +857,11 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	challenge := s.anonAuth.GetChallenge(req.ChallengeID)
+	challenge, err := s.anonAuth.GetChallengeWithError(req.ChallengeID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "anonymous challenge backend unavailable")
+		return
+	}
 	if challenge == nil {
 		writeError(w, http.StatusUnauthorized, "challenge expired or not found")
 		return
@@ -706,7 +931,12 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		req.NullifierHash = validatedVPNAccess.NullifierHash
 		req.SessionKeyHash = validatedVPNAccess.SessionKeyHash
 	}
-	if !s.anonAuth.ConsumeNullifier(req.NullifierHash, s.cfg.CredentialTTL) {
+	consumed, err := s.anonAuth.ConsumeNullifierWithError(req.NullifierHash, s.cfg.CredentialTTL)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "anonymous nullifier backend unavailable")
+		return
+	}
+	if !consumed {
 		writeError(w, http.StatusConflict, "nullifier already used")
 		return
 	}
@@ -716,41 +946,80 @@ func (s *Server) handleAnonymousVPNConnect(w http.ResponseWriter, r *http.Reques
 		sessionExpiresAt = validatedVPNAccess.ExpiryBucket
 	}
 
-	session := s.gate.CreateAnonymousSession(nftgate.AnonymousSessionParams{
+	session, err := s.gate.CreateAnonymousSessionWithError(nftgate.AnonymousSessionParams{
 		Tier:           tier,
 		PolicyEpoch:    challenge.PolicyEpoch,
 		NullifierHash:  req.NullifierHash,
 		SessionKeyHash: req.SessionKeyHash,
 		ExpiresAt:      sessionExpiresAt,
 	})
-	if session == nil {
-		s.anonAuth.ReleaseNullifier(req.NullifierHash)
+	if err != nil {
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
 		writeError(w, http.StatusInternalServerError, "failed to create anonymous session")
+		return
+	}
+	session, _, err = s.gate.BindSessionGateway(session.ID, s.currentGatewayIdentity())
+	if err != nil {
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
+		writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
+		return
+	}
+	if session == nil || !s.sessionOwnedByCurrentGateway(session) {
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
+		writeError(w, http.StatusServiceUnavailable, "failed to bind anonymous session to gateway")
+		return
+	}
+
+	reserved, err := s.reservePeer(req.PublicKey, session.ID, session.ExpiresAt)
+	if err != nil {
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
+		writeError(w, http.StatusServiceUnavailable, "peer reservation backend unavailable")
+		return
+	}
+	if !reserved {
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
+		writeError(w, http.StatusForbidden, "public key is already bound to another session")
 		return
 	}
 
 	peerCfg, err := s.wg.AddPeer(req.PublicKey, time.Until(session.ExpiresAt))
 	if err != nil {
-		s.gate.DeleteSessionByID(session.ID)
-		s.anonAuth.ReleaseNullifier(req.NullifierHash)
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.deletePeerOwner(req.PublicKey)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
 		log.Printf("Error adding anonymous WireGuard peer: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to provision VPN connection")
 		return
 	}
 
-	s.anonAuth.DeleteChallenge(req.ChallengeID)
-	s.setPeerOwner(req.PublicKey, session.ID)
+	_ = s.anonAuth.DeleteChallengeWithError(req.ChallengeID)
 	log.Printf("VPN connected: anonymous tier=%s epoch=%d", session.Tier, session.PolicyEpoch)
+	if err := s.recordPeerState(session.ID, req.PublicKey, peerCfg.ClientAddress, session.ExpiresAt); err != nil {
+		_ = s.wg.RemovePeer(req.PublicKey)
+		_ = s.gate.DeleteSessionByIDWithError(session.ID)
+		_ = s.deletePeerOwner(req.PublicKey)
+		_ = s.anonAuth.ReleaseNullifierWithError(req.NullifierHash)
+		log.Printf("Error persisting peer state: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
+		return
+	}
 
+	resp := s.connectResponse(peerCfg, session.ExpiresAt, session.Tier.String())
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_token":     session.Token,
-		"server_public_key": peerCfg.ServerPublicKey,
-		"server_endpoint":   peerCfg.ServerEndpoint,
-		"client_address":    peerCfg.ClientAddress,
-		"dns":               peerCfg.DNS,
-		"allowed_ips":       peerCfg.AllowedIPs,
-		"expires_at":        session.ExpiresAt.UTC().Format(time.RFC3339),
-		"tier":              session.Tier.String(),
+		"session_token":       session.Token,
+		"server_public_key":   resp.ServerPublicKey,
+		"server_endpoint":     resp.ServerEndpoint,
+		"client_address":      resp.ClientAddress,
+		"dns":                 resp.DNS,
+		"allowed_ips":         resp.AllowedIPs,
+		"expires_at":          resp.ExpiresAt,
+		"tier":                resp.Tier,
+		"gateway_instance_id": resp.GatewayInstanceID,
+		"gateway_url":         resp.GatewayURL,
 	})
 }
 
@@ -767,13 +1036,67 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := s.gate.GetSessionByToken(req.SessionToken)
+	session, err := s.gate.GetSessionByTokenWithError(req.SessionToken)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
+		return
+	}
 	if session == nil {
 		writeError(w, http.StatusUnauthorized, "session expired or not found, re-authenticate")
 		return
 	}
-	if !s.peerOwnedBy(req.PublicKey, session.ID) {
+	if session.GatewayInstanceID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "session is not currently connected to a gateway",
+			"code":  "session_not_connected",
+		})
+		return
+	}
+	if !s.sessionOwnedByCurrentGateway(session) {
+		ownerState, err := s.gatewayOwnerState(session)
+		if err != nil {
+			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
+			return
+		}
+		if ownerState == gatewayOwnerStateDead {
+			reconciled, err := s.clearDeadSessionOwnership(session)
+			if err != nil {
+				log.Printf("Error recovering dead gateway session %s during disconnect: %v", session.ID, err)
+				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
+				return
+			}
+			if reconciled != nil && reconciled.GatewayInstanceID != "" && !s.sessionOwnedByCurrentGateway(reconciled) {
+				if s.tryForwardDisconnectToOwner(w, r, reconciled, req) {
+					return
+				}
+				s.writeGatewayAffinityConflict(w, reconciled)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":    "disconnected",
+				"recovered": true,
+			})
+			return
+		}
+		if s.tryForwardDisconnectToOwner(w, r, session, req) {
+			return
+		}
+		s.writeGatewayAffinityConflict(w, session)
+		return
+	}
+	owned, err := s.peerOwnedBy(req.PublicKey, session.ID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "peer reservation backend unavailable")
+		return
+	}
+	if !owned {
 		writeError(w, http.StatusForbidden, "public key is not owned by this session")
+		return
+	}
+	if err := s.recoverPeerIfNeeded(req.PublicKey); err != nil {
+		log.Printf("Error recovering peer state for %s: %v", req.PublicKey, err)
+		writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
 		return
 	}
 
@@ -781,7 +1104,15 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	s.deletePeerOwner(req.PublicKey)
+	if err := s.deletePeerOwner(req.PublicKey); err != nil {
+		log.Printf("Warning: failed to release peer owner for %s: %v", req.PublicKey, err)
+	}
+	if err := s.gate.ReleaseSessionGateway(session.ID, s.currentGatewayInstanceID()); err != nil {
+		log.Printf("Warning: failed to release gateway affinity for session %s: %v", session.ID, err)
+	}
+	if err := s.deletePeerState(req.PublicKey); err != nil {
+		log.Printf("Warning: failed to delete peer recovery state for %s: %v", req.PublicKey, err)
+	}
 
 	// Close on-chain session (fire-and-forget) — skip for subscribers
 	// (subscription stays valid; user can reconnect freely)
@@ -828,7 +1159,11 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := s.gate.GetSessionByToken(token)
+	session, err := s.gate.GetSessionByTokenWithError(token)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
+		return
+	}
 	if session == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"connected": false,
@@ -836,11 +1171,61 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if session.GatewayInstanceID == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"connected":  false,
+			"reason":     "session has no active gateway binding",
+			"tier":       session.Tier.String(),
+			"expires_at": session.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+		return
+	}
+	if !s.sessionOwnedByCurrentGateway(session) {
+		ownerState, err := s.gatewayOwnerState(session)
+		if err != nil {
+			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
+			return
+		}
+		if ownerState == gatewayOwnerStateDead {
+			previousGatewayInstanceID := session.GatewayInstanceID
+			previousGatewayURL := session.GatewayPublicURL
+			reconciled, err := s.clearDeadSessionOwnership(session)
+			if err != nil {
+				log.Printf("Error recovering dead gateway session %s during status: %v", session.ID, err)
+				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
+				return
+			}
+			if reconciled != nil && reconciled.GatewayInstanceID != "" && !s.sessionOwnedByCurrentGateway(reconciled) {
+				if s.tryForwardStatusToOwner(w, r, reconciled) {
+					return
+				}
+				session = reconciled
+			} else {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"connected":                    false,
+					"reason":                       "owning gateway unavailable",
+					"code":                         "gateway_owner_unavailable",
+					"recoverable":                  true,
+					"tier":                         session.Tier.String(),
+					"expires_at":                   session.ExpiresAt.UTC().Format(time.RFC3339),
+					"previous_gateway_instance_id": previousGatewayInstanceID,
+					"previous_gateway_url":         previousGatewayURL,
+				})
+				return
+			}
+		} else if s.tryForwardStatusToOwner(w, r, session) {
+			return
+		}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"connected":  true,
-		"tier":       session.Tier.String(),
-		"expires_at": session.ExpiresAt.UTC().Format(time.RFC3339),
+		"connected":           true,
+		"tier":                session.Tier.String(),
+		"expires_at":          session.ExpiresAt.UTC().Format(time.RFC3339),
+		"gateway_instance_id": session.GatewayInstanceID,
+		"gateway_url":         session.GatewayPublicURL,
+		"gateway_affinity_ok": s.sessionOwnedByCurrentGateway(session),
 	})
 }
 
@@ -1016,6 +1401,79 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+func (s *Server) connectResponse(peerCfg *wireguard.PeerConfig, expiresAt time.Time, tier string) ConnectResponse {
+	return ConnectResponse{
+		ServerPublicKey:   peerCfg.ServerPublicKey,
+		ServerEndpoint:    peerCfg.ServerEndpoint,
+		ClientAddress:     peerCfg.ClientAddress,
+		DNS:               peerCfg.DNS,
+		AllowedIPs:        peerCfg.AllowedIPs,
+		ExpiresAt:         expiresAt.UTC().Format(time.RFC3339),
+		Tier:              tier,
+		GatewayInstanceID: s.currentGatewayInstanceID(),
+		GatewayURL:        s.currentGatewayPublicURL(),
+	}
+}
+
+func (s *Server) currentGatewayIdentity() nftgate.GatewayIdentity {
+	return nftgate.GatewayIdentity{
+		InstanceID: s.currentGatewayInstanceID(),
+		PublicURL:  s.currentGatewayPublicURL(),
+		ForwardURL: s.currentGatewayForwardURL(),
+	}
+}
+
+func (s *Server) currentGatewayInstanceID() string {
+	if s == nil || s.cfg == nil {
+		return "gateway-local"
+	}
+	if instanceID := strings.TrimSpace(s.cfg.GatewayInstanceID); instanceID != "" {
+		return instanceID
+	}
+	if listenAddr := strings.TrimSpace(s.cfg.ListenAddr); listenAddr != "" {
+		return "gateway" + listenAddr
+	}
+	return "gateway-local"
+}
+
+func (s *Server) currentGatewayPublicURL() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(s.cfg.GatewayPublicURL), "/")
+}
+
+func (s *Server) currentGatewayForwardURL() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	if forwardURL := strings.TrimRight(strings.TrimSpace(s.cfg.GatewayForwardURL), "/"); forwardURL != "" {
+		return forwardURL
+	}
+	return s.currentGatewayPublicURL()
+}
+
+func (s *Server) sessionOwnedByCurrentGateway(session *nftgate.Session) bool {
+	if session == nil || session.GatewayInstanceID == "" {
+		return false
+	}
+	return session.GatewayInstanceID == s.currentGatewayInstanceID()
+}
+
+func (s *Server) writeGatewayAffinityConflict(w http.ResponseWriter, session *nftgate.Session) {
+	resp := map[string]any{
+		"error": "session is bound to another gateway instance",
+		"code":  "session_bound_to_other_gateway",
+	}
+	if session != nil && session.GatewayInstanceID != "" {
+		resp["gateway_instance_id"] = session.GatewayInstanceID
+	}
+	if session != nil && session.GatewayPublicURL != "" {
+		resp["gateway_url"] = session.GatewayPublicURL
+	}
+	writeJSON(w, http.StatusConflict, resp)
+}
+
 func (s *Server) effectiveTier(tier nftcheck.AccessTier) nftcheck.AccessTier {
 	if tier == nftcheck.TierFree && !s.freeTier {
 		return nftcheck.TierPaid
@@ -1176,32 +1634,16 @@ func policyEpochFromMetadata(metadata map[string]any) (uint64, error) {
 	}
 }
 
-func (s *Server) claimsPeer(pubKey string, ownerID string) bool {
-	s.peerMu.Lock()
-	defer s.peerMu.Unlock()
-	if existing, ok := s.peerOwners[pubKey]; ok && existing != ownerID {
-		return false
-	}
-	return true
+func (s *Server) reservePeer(pubKey string, ownerID string, expiresAt time.Time) (bool, error) {
+	return s.peerOwners.Reserve(pubKey, ownerID, s.currentGatewayInstanceID(), expiresAt)
 }
 
-func (s *Server) setPeerOwner(pubKey string, ownerID string) {
-	s.peerMu.Lock()
-	s.peerOwners[pubKey] = ownerID
-	s.peerMu.Unlock()
+func (s *Server) peerOwnedBy(pubKey string, ownerID string) (bool, error) {
+	return s.peerOwners.OwnedBy(pubKey, ownerID)
 }
 
-func (s *Server) peerOwnedBy(pubKey string, ownerID string) bool {
-	s.peerMu.RLock()
-	defer s.peerMu.RUnlock()
-	existing, ok := s.peerOwners[pubKey]
-	return ok && existing == ownerID
-}
-
-func (s *Server) deletePeerOwner(pubKey string) {
-	s.peerMu.Lock()
-	delete(s.peerOwners, pubKey)
-	s.peerMu.Unlock()
+func (s *Server) deletePeerOwner(pubKey string) error {
+	return s.peerOwners.Release(pubKey)
 }
 
 func parseAddress(s string) (addr [20]byte) {

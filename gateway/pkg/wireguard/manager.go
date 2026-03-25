@@ -159,6 +159,28 @@ func (m *Manager) GetPeer(clientPubKey string) *Peer {
 	return m.peers[clientPubKey]
 }
 
+// RecoverPeer restores local bookkeeping for an already-provisioned peer.
+// It reserves the peer IP locally without re-running `wg set`.
+func (m *Manager) RecoverPeer(peer Peer) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.peers[peer.PublicKey]; ok {
+		if existing.ClientIP == peer.ClientIP {
+			return nil
+		}
+		return fmt.Errorf("peer %s already tracked with a different IP", truncateKey(peer.PublicKey))
+	}
+	if err := m.ipPool.Reserve(peer.ClientIP); err != nil {
+		return fmt.Errorf("reserving recovered peer IP: %w", err)
+	}
+
+	copyPeer := peer
+	m.peers[peer.PublicKey] = &copyPeer
+	log.Printf("[wireguard] Peer recovered (expires %s)", peer.ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
 // StartCleanupWorker starts a background goroutine that removes expired peers.
 func (m *Manager) StartCleanupWorker(interval time.Duration) {
 	go func() {
@@ -266,6 +288,17 @@ func (p *ipPool) Allocate() (string, error) {
 	}
 
 	return "", fmt.Errorf("IP pool exhausted")
+}
+
+func (p *ipPool) Reserve(ip string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.allocated[ip] {
+		return fmt.Errorf("IP already allocated: %s", ip)
+	}
+	p.allocated[ip] = true
+	return nil
 }
 
 func (p *ipPool) Release(ip string) {

@@ -8,5 +8,6 @@
   "challenge_ttl": 300000000000,
   "nonce_length": 16,
   "credential_ttl": 86400000000000,
-  "rate_limit_per_minute": 30
+  "rate_limit_per_minute": 30,
+  "gateway_forward_url": "http://gateway.internal:8080"
 }

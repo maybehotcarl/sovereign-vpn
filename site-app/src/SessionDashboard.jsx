@@ -98,7 +98,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const handleDisconnect = useCallback(async () => {
     setDisconnecting(true);
     try {
-      await fetch(`${session.gatewayUrl}/vpn/disconnect`, {
+      const disconnect = async (baseUrl) => fetch(`${baseUrl}/vpn/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -106,6 +106,13 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           public_key: session.publicKey,
         }),
       });
+      let resp = await disconnect(session.gatewayUrl);
+      if (resp.status === 409) {
+        const data = await resp.json().catch(() => null);
+        if (data?.gateway_url && data.gateway_url !== session.gatewayUrl) {
+          resp = await disconnect(data.gateway_url);
+        }
+      }
     } catch (err) {
       console.error('Disconnect error:', err);
     }

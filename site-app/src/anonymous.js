@@ -48,9 +48,9 @@ export function anonymousVPNConfig(gatewayUrl = '') {
     proofType: PROOF_TYPE,
     apiUrl,
     artifactBaseUrl,
-    devRegistrationEnabled: envFlag(
-      import.meta.env.VITE_ENABLE_ANON_VPN_DEV_REGISTRATION || ''
-    ),
+    allowDevRegistrationFallback:
+      import.meta.env.DEV &&
+      envFlag(import.meta.env.VITE_ENABLE_ANON_VPN_DEV_REGISTRATION || ''),
     devRegistrationUrl: normalizeBaseUrl(configuredDevRegistrationUrl),
     devRegistrationToken: (import.meta.env.VITE_VPN_ACCESS_DEV_REGISTRATION_TOKEN || '').trim(),
   };
@@ -64,7 +64,7 @@ export function validateAnonymousVPNConfig(config) {
   if (!config.artifactBaseUrl) {
     problems.push('VITE_ZK_ARTIFACT_BASE_URL is required');
   }
-  if (config.devRegistrationEnabled && !config.devRegistrationUrl) {
+  if (config.allowDevRegistrationFallback && !config.devRegistrationUrl) {
     problems.push('VITE_VPN_ACCESS_DEV_REGISTRATION_URL is required when dev registration is enabled');
   }
   return problems;

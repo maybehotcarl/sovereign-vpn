@@ -30,39 +30,67 @@ import (
 
 // Session represents an authenticated VPN session.
 type Session struct {
-	Address        common.Address
-	AddressBound   bool
-	NullifierHash  string
-	SessionKeyHash string
-	PolicyEpoch    uint64
-	ID             string
-	Token          string
-	Tier           nftcheck.AccessTier
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
+	Address           common.Address
+	AddressBound      bool
+	NullifierHash     string
+	SessionKeyHash    string
+	PolicyEpoch       uint64
+	GatewayInstanceID string
+	GatewayPublicURL  string
+	GatewayForwardURL string
+	ID                string
+	Token             string
+	Tier              nftcheck.AccessTier
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+}
+
+// GatewayIdentity identifies the gateway instance that owns a live WireGuard session.
+type GatewayIdentity struct {
+	InstanceID string
+	PublicURL  string
+	ForwardURL string
 }
 
 // Gate holds the NFT verification state and session store.
 type Gate struct {
 	checker    nftcheck.AccessChecker
 	credTTL    time.Duration
-	sessions   *SessionStore
+	sessions   sessionStoreBackend
 	signingKey [32]byte
 }
 
 // NewGate creates a new NFT gate.
 func NewGate(checker nftcheck.AccessChecker, credentialTTL time.Duration) *Gate {
-	var key [32]byte
-	if _, err := rand.Read(key[:]); err != nil {
-		panic("failed to initialize session signing key")
+	g, err := NewGateWithOptions(checker, credentialTTL, GateOptions{})
+	if err != nil {
+		panic(err)
+	}
+	return g
+}
+
+// NewGateWithOptions creates a new NFT gate with pluggable session storage and signing secret.
+func NewGateWithOptions(
+	checker nftcheck.AccessChecker,
+	credentialTTL time.Duration,
+	opts GateOptions,
+) (*Gate, error) {
+	key, err := deriveSigningKey(opts.SessionSigningSecret)
+	if err != nil {
+		return nil, fmt.Errorf("initializing session signing key: %w", err)
+	}
+
+	sessionStore := opts.SessionStore
+	if sessionStore == nil {
+		sessionStore = newInMemorySessionBackend()
 	}
 
 	return &Gate{
 		checker:    checker,
 		credTTL:    credentialTTL,
-		sessions:   NewSessionStore(),
+		sessions:   sessionStore,
 		signingKey: key,
-	}
+	}, nil
 }
 
 // CheckAccess verifies NFT ownership for a wallet address.
@@ -77,12 +105,21 @@ func (g *Gate) CheckAccess(ctx context.Context, wallet common.Address) (nftcheck
 
 // CreateSession creates a new authenticated session for a verified wallet.
 func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *Session {
+	session, err := g.CreateSessionWithError(wallet, tier)
+	if err != nil {
+		log.Printf("[nftgate] Failed to create session: %v", err)
+		return nil
+	}
+	return session
+}
+
+// CreateSessionWithError creates a new authenticated session for a verified wallet.
+func (g *Gate) CreateSessionWithError(wallet common.Address, tier nftcheck.AccessTier) (*Session, error) {
 	now := time.Now()
 	expiresAt := now.Add(g.credTTL)
 	id, token, err := g.newSessionToken(expiresAt)
 	if err != nil {
-		log.Printf("[nftgate] Failed to issue session token: %v", err)
-		return nil
+		return nil, err
 	}
 
 	session := &Session{
@@ -94,10 +131,12 @@ func (g *Gate) CreateSession(wallet common.Address, tier nftcheck.AccessTier) *S
 		CreatedAt:    now,
 		ExpiresAt:    expiresAt,
 	}
-	g.sessions.Set(session)
+	if err := g.sessions.Set(session); err != nil {
+		return nil, err
+	}
 	log.Printf("[nftgate] Session created: tier=%s expires=%s",
 		tier, session.ExpiresAt.Format(time.RFC3339))
-	return session
+	return session, nil
 }
 
 // AnonymousSessionParams describes the metadata attached to an anonymous session.
@@ -111,6 +150,16 @@ type AnonymousSessionParams struct {
 
 // CreateAnonymousSession creates a new authenticated session without binding it to a wallet address.
 func (g *Gate) CreateAnonymousSession(params AnonymousSessionParams) *Session {
+	session, err := g.CreateAnonymousSessionWithError(params)
+	if err != nil {
+		log.Printf("[nftgate] Failed to create anonymous session: %v", err)
+		return nil
+	}
+	return session
+}
+
+// CreateAnonymousSessionWithError creates a new authenticated session without binding it to a wallet address.
+func (g *Gate) CreateAnonymousSessionWithError(params AnonymousSessionParams) (*Session, error) {
 	now := time.Now()
 	expiresAt := now.Add(g.credTTL)
 	if !params.ExpiresAt.IsZero() && params.ExpiresAt.Before(expiresAt) {
@@ -118,8 +167,7 @@ func (g *Gate) CreateAnonymousSession(params AnonymousSessionParams) *Session {
 	}
 	id, token, err := g.newSessionToken(expiresAt)
 	if err != nil {
-		log.Printf("[nftgate] Failed to issue anonymous session token: %v", err)
-		return nil
+		return nil, err
 	}
 
 	session := &Session{
@@ -133,54 +181,105 @@ func (g *Gate) CreateAnonymousSession(params AnonymousSessionParams) *Session {
 		CreatedAt:      now,
 		ExpiresAt:      expiresAt,
 	}
-	g.sessions.Set(session)
+	if err := g.sessions.Set(session); err != nil {
+		return nil, err
+	}
 	log.Printf("[nftgate] Anonymous session created: tier=%s expires=%s",
 		params.Tier, session.ExpiresAt.Format(time.RFC3339))
-	return session
+	return session, nil
 }
 
 // GetSession retrieves an active session. Returns nil if expired or not found.
 func (g *Gate) GetSession(wallet common.Address) *Session {
-	session := g.sessions.GetByAddress(wallet)
+	session, _ := g.GetSessionWithError(wallet)
+	return session
+}
+
+// GetSessionWithError retrieves an active session. Returns nil if expired or not found.
+func (g *Gate) GetSessionWithError(wallet common.Address) (*Session, error) {
+	session, err := g.sessions.GetByAddress(wallet)
+	if err != nil {
+		return nil, err
+	}
 	if session == nil {
-		return nil
+		return nil, nil
 	}
 	if time.Now().After(session.ExpiresAt) {
-		g.sessions.DeleteByAddress(wallet)
-		return nil
+		if err := g.sessions.DeleteByAddress(wallet); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
-	return session
+	return session, nil
 }
 
 // GetSessionByToken retrieves an active session by signed session token.
 func (g *Gate) GetSessionByToken(token string) *Session {
+	session, _ := g.GetSessionByTokenWithError(token)
+	return session
+}
+
+// GetSessionByTokenWithError retrieves an active session by signed session token.
+func (g *Gate) GetSessionByTokenWithError(token string) (*Session, error) {
 	id, expiresAt, err := g.parseAndVerifyToken(token)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
-	session := g.sessions.GetByID(id)
+	session, err := g.sessions.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
 	if session == nil {
-		return nil
+		return nil, nil
 	}
 	now := time.Now()
 	if now.After(session.ExpiresAt) || now.After(expiresAt) {
-		g.sessions.DeleteByID(id)
-		return nil
+		if err := g.sessions.DeleteByID(id); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
-	return session
+	return session, nil
 }
 
 // RevokeSession removes a session (used when NFT transfer is detected).
 func (g *Gate) RevokeSession(wallet common.Address) {
-	g.sessions.DeleteByAddress(wallet)
+	if err := g.RevokeSessionWithError(wallet); err != nil {
+		log.Printf("[nftgate] Failed to revoke session: %v", err)
+		return
+	}
 	log.Printf("[nftgate] Session revoked")
+}
+
+// RevokeSessionWithError removes a session (used when NFT transfer is detected).
+func (g *Gate) RevokeSessionWithError(wallet common.Address) error {
+	return g.sessions.DeleteByAddress(wallet)
 }
 
 // DeleteSessionByID removes a session by opaque session ID.
 func (g *Gate) DeleteSessionByID(id string) {
-	g.sessions.DeleteByID(id)
+	if err := g.DeleteSessionByIDWithError(id); err != nil {
+		log.Printf("[nftgate] Failed to delete session: %v", err)
+		return
+	}
 	log.Printf("[nftgate] Session deleted")
+}
+
+// DeleteSessionByIDWithError removes a session by opaque session ID.
+func (g *Gate) DeleteSessionByIDWithError(id string) error {
+	return g.sessions.DeleteByID(id)
+}
+
+// BindSessionGateway binds a session to a gateway instance on first successful connect.
+// It returns the stored session and whether the binding was created during this call.
+func (g *Gate) BindSessionGateway(id string, gateway GatewayIdentity) (*Session, bool, error) {
+	return g.sessions.BindGateway(id, gateway)
+}
+
+// ReleaseSessionGateway clears the gateway owner for a session when the peer disconnects.
+func (g *Gate) ReleaseSessionGateway(id string, gatewayInstanceID string) error {
+	return g.sessions.ReleaseGateway(id, gatewayInstanceID)
 }
 
 // InvalidateCache removes cached NFT check results for a wallet.
@@ -190,6 +289,12 @@ func (g *Gate) InvalidateCache(wallet common.Address) {
 
 // ActiveSessionCount returns the number of active sessions.
 func (g *Gate) ActiveSessionCount() int {
+	count, _ := g.ActiveSessionCountWithError()
+	return count
+}
+
+// ActiveSessionCountWithError returns the number of active sessions.
+func (g *Gate) ActiveSessionCountWithError() (int, error) {
 	return g.sessions.Len()
 }
 
@@ -211,7 +316,11 @@ func (g *Gate) HTTPMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		session := g.GetSessionByToken(token)
+		session, err := g.GetSessionByTokenWithError(token)
+		if err != nil {
+			http.Error(w, `{"error":"session backend unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
 		if session == nil {
 			http.Error(w, `{"error":"session expired or not found, re-authenticate via /auth/verify"}`, http.StatusUnauthorized)
 			return

@@ -91,6 +91,15 @@ func main() {
 	zkAPIURL := flag.String("zk-api-url", "", "ZK service API URL (enables ZK proof verification)")
 	zkAPIKey := flag.String("zk-api-key", "", "ZK service API key")
 
+	// Shared state flags
+	redisURL := flag.String("redis-url", "", "Redis URL for shared multi-node state")
+	redisPrefix := flag.String("redis-prefix", "sovereign-vpn", "Redis key prefix for shared state")
+	sessionSigningKey := flag.String("session-signing-key", "", "Shared secret used to sign session tokens across gateway instances")
+	gatewayInstanceID := flag.String("gateway-instance-id", "", "Stable unique ID for this gateway instance when shared state is enabled")
+	gatewayPublicURL := flag.String("gateway-public-url", "", "Public base URL for this gateway instance used in affinity hints")
+	gatewayForwardURL := flag.String("gateway-forward-url", "", "Internal base URL for this gateway instance used for inter-gateway forwarding")
+	gatewayForwardingKey := flag.String("gateway-forwarding-key", "", "Shared secret used to authenticate inter-gateway forwarded requests")
+
 	flag.Parse()
 
 	if *sessionKey == "" {
@@ -98,6 +107,29 @@ func main() {
 	}
 	if *heartbeatKey == "" {
 		*heartbeatKey = os.Getenv("HEARTBEAT_KEY")
+	}
+	if *redisURL == "" {
+		*redisURL = os.Getenv("REDIS_URL")
+	}
+	if *sessionSigningKey == "" {
+		*sessionSigningKey = os.Getenv("SESSION_SIGNING_KEY")
+	}
+	if *gatewayInstanceID == "" {
+		*gatewayInstanceID = os.Getenv("GATEWAY_INSTANCE_ID")
+	}
+	if *gatewayPublicURL == "" {
+		*gatewayPublicURL = os.Getenv("GATEWAY_PUBLIC_URL")
+	}
+	if *gatewayForwardURL == "" {
+		*gatewayForwardURL = os.Getenv("GATEWAY_FORWARD_URL")
+	}
+	if *gatewayForwardingKey == "" {
+		*gatewayForwardingKey = os.Getenv("GATEWAY_FORWARDING_KEY")
+	}
+	if *redisPrefix == "sovereign-vpn" {
+		if envPrefix := os.Getenv("REDIS_PREFIX"); envPrefix != "" {
+			*redisPrefix = envPrefix
+		}
 	}
 
 	// Load config
@@ -131,6 +163,27 @@ func main() {
 	}
 	if *enableFreeTier {
 		cfg.EnableFreeTier = true
+	}
+	if *redisURL != "" {
+		cfg.RedisURL = *redisURL
+	}
+	if *redisPrefix != "" {
+		cfg.RedisKeyPrefix = *redisPrefix
+	}
+	if *sessionSigningKey != "" {
+		cfg.SessionSigningKey = *sessionSigningKey
+	}
+	if *gatewayInstanceID != "" {
+		cfg.GatewayInstanceID = *gatewayInstanceID
+	}
+	if *gatewayPublicURL != "" {
+		cfg.GatewayPublicURL = *gatewayPublicURL
+	}
+	if *gatewayForwardURL != "" {
+		cfg.GatewayForwardURL = *gatewayForwardURL
+	}
+	if *gatewayForwardingKey != "" {
+		cfg.GatewayForwardingKey = *gatewayForwardingKey
 	}
 
 	// In direct mode, AccessPolicy is not required
@@ -231,7 +284,15 @@ func main() {
 	wgManager.StartCleanupWorker(1 * time.Minute)
 
 	// Create and start server
-	srv := server.New(cfg, checker, wgManager)
+	srv, err := server.New(cfg, checker, wgManager)
+	if err != nil {
+		log.Fatalf("Failed to create gateway server: %v", err)
+	}
+	defer func() {
+		if err := srv.Close(); err != nil {
+			log.Printf("Error closing gateway resources: %v", err)
+		}
+	}()
 	srv.SetChainID(*chainID)
 	log.Printf("Free tier enabled: %v", cfg.EnableFreeTier)
 
@@ -374,6 +435,19 @@ func main() {
 	}
 	if *zkAPIURL != "" {
 		log.Printf("  ZK API:        %s", *zkAPIURL)
+	}
+	if cfg.RedisURL != "" {
+		log.Printf("  Shared Redis:  %s (prefix=%s)", cfg.RedisURL, cfg.RedisKeyPrefix)
+		log.Printf("  Gateway ID:    %s", cfg.GatewayInstanceID)
+		if cfg.GatewayPublicURL != "" {
+			log.Printf("  Gateway URL:   %s", cfg.GatewayPublicURL)
+		}
+		if cfg.GatewayForwardingKey != "" {
+			log.Printf("  Gateway Fwd:   enabled")
+		}
+	}
+	if cfg.RedisURL != "" {
+		log.Printf("  Shared State:  redis (%s)", cfg.RedisKeyPrefix)
 	}
 
 	// Graceful shutdown

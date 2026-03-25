@@ -6,6 +6,13 @@ Built for and governed by the [6529 community](https://6529.io/).
 
 ---
 
+Current implementation note: the active work has moved toward the anonymous
+paid-access path built around `vpn_access_v1`. For the most accurate repo
+orientation, see [CURRENT_STATE.md](CURRENT_STATE.md). For the current verified
+mainnet contract surface, see [MAINNET_ADDRESSES.md](MAINNET_ADDRESSES.md). For
+the concrete beta push-to-launch checklist, see
+[BETA_LAUNCH_CHECKLIST.md](BETA_LAUNCH_CHECKLIST.md).
+
 ## What Is This?
 
 Sovereign VPN is a decentralized VPN where:

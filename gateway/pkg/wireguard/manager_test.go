@@ -245,3 +245,46 @@ func TestNewManagerInvalidSubnet(t *testing.T) {
 		t.Error("expected error for invalid subnet")
 	}
 }
+
+func TestRecoverPeer(t *testing.T) {
+	m, err := NewManager(Config{
+		Interface:       "wg0",
+		ServerPublicKey: "test-pub-key",
+		ServerEndpoint:  "1.2.3.4:51820",
+		Subnet:          "10.8.0.0/24",
+		DNS:             "1.1.1.1",
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	expiresAt := time.Now().Add(time.Hour)
+	if err := m.RecoverPeer(Peer{
+		PublicKey:  "recovered-key",
+		ClientIP:   "10.8.0.77",
+		AssignedAt: time.Now(),
+		ExpiresAt:  expiresAt,
+	}); err != nil {
+		t.Fatalf("RecoverPeer: %v", err)
+	}
+
+	if m.PeerCount() != 1 {
+		t.Fatalf("PeerCount = %d, want 1", m.PeerCount())
+	}
+
+	peer := m.GetPeer("recovered-key")
+	if peer == nil {
+		t.Fatal("expected recovered peer")
+	}
+	if peer.ClientIP != "10.8.0.77" {
+		t.Fatalf("ClientIP = %q, want 10.8.0.77", peer.ClientIP)
+	}
+
+	nextIP, err := m.ipPool.Allocate()
+	if err != nil {
+		t.Fatalf("Allocate after RecoverPeer: %v", err)
+	}
+	if nextIP == "10.8.0.77" {
+		t.Fatal("expected recovered peer IP to remain reserved")
+	}
+}

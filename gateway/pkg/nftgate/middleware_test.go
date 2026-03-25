@@ -19,7 +19,7 @@ func testGate() *Gate {
 	return &Gate{
 		checker:  nil, // not used in session-only tests
 		credTTL:  1 * time.Hour,
-		sessions: NewSessionStore(),
+		sessions: newInMemorySessionBackend(),
 	}
 }
 
@@ -50,7 +50,7 @@ func TestCreateAndGetSession(t *testing.T) {
 func TestGetSessionExpired(t *testing.T) {
 	g := &Gate{
 		credTTL:  1 * time.Millisecond,
-		sessions: NewSessionStore(),
+		sessions: newInMemorySessionBackend(),
 	}
 	addr := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
@@ -137,6 +137,97 @@ func TestCreateAnonymousSession(t *testing.T) {
 	}
 	if got.AddressBound {
 		t.Fatal("expected stored anonymous session to remain addressless")
+	}
+}
+
+func TestBindAndReleaseSessionGateway(t *testing.T) {
+	g := testGate()
+	addr := common.HexToAddress("0xffffffffffffffffffffffffffffffffffffffff")
+
+	session := g.CreateSession(addr, nftcheck.TierFree)
+	if session == nil {
+		t.Fatal("expected session")
+	}
+
+	stored, newlyBound, err := g.BindSessionGateway(session.ID, GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+		ForwardURL: "http://gw-a.internal:8080",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway: %v", err)
+	}
+	if !newlyBound {
+		t.Fatal("expected first bind to mark session as newly bound")
+	}
+	if stored == nil {
+		t.Fatal("expected stored session after first bind")
+	}
+	if stored.GatewayInstanceID != "gw-a" {
+		t.Fatalf("stored gateway instance = %q, want gw-a", stored.GatewayInstanceID)
+	}
+	if stored.GatewayPublicURL != "https://gw-a.example.com" {
+		t.Fatalf("stored gateway public URL = %q", stored.GatewayPublicURL)
+	}
+	if stored.GatewayForwardURL != "http://gw-a.internal:8080" {
+		t.Fatalf("stored gateway forward URL = %q", stored.GatewayForwardURL)
+	}
+
+	stored, newlyBound, err = g.BindSessionGateway(session.ID, GatewayIdentity{
+		InstanceID: "gw-a",
+		PublicURL:  "https://gw-a.example.com",
+		ForwardURL: "http://gw-a.internal:8080",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway repeat: %v", err)
+	}
+	if newlyBound {
+		t.Fatal("expected repeat bind on same gateway to report already bound")
+	}
+
+	stored, newlyBound, err = g.BindSessionGateway(session.ID, GatewayIdentity{
+		InstanceID: "gw-b",
+		PublicURL:  "https://gw-b.example.com",
+		ForwardURL: "http://gw-b.internal:8080",
+	})
+	if err != nil {
+		t.Fatalf("BindSessionGateway other gateway: %v", err)
+	}
+	if newlyBound {
+		t.Fatal("expected bind on another gateway to be rejected")
+	}
+	if stored == nil {
+		t.Fatal("expected stored session after conflicting bind")
+	}
+	if stored.GatewayInstanceID != "gw-a" {
+		t.Fatalf("stored gateway instance after conflict = %q, want gw-a", stored.GatewayInstanceID)
+	}
+
+	if err := g.ReleaseSessionGateway(session.ID, "gw-b"); err != nil {
+		t.Fatalf("ReleaseSessionGateway wrong gateway: %v", err)
+	}
+	stored = g.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session after wrong release")
+	}
+	if stored.GatewayInstanceID != "gw-a" {
+		t.Fatalf("gateway instance after wrong release = %q, want gw-a", stored.GatewayInstanceID)
+	}
+
+	if err := g.ReleaseSessionGateway(session.ID, "gw-a"); err != nil {
+		t.Fatalf("ReleaseSessionGateway: %v", err)
+	}
+	stored = g.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session after release")
+	}
+	if stored.GatewayInstanceID != "" || stored.GatewayPublicURL != "" || stored.GatewayForwardURL != "" {
+		t.Fatalf(
+			"expected gateway binding to be cleared, got id=%q public=%q forward=%q",
+			stored.GatewayInstanceID,
+			stored.GatewayPublicURL,
+			stored.GatewayForwardURL,
+		)
 	}
 }
 

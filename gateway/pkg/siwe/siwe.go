@@ -39,18 +39,36 @@ type VerifiedAuth struct {
 type Service struct {
 	domain       string
 	uri          string
-	nonceStore   *NonceStore
+	nonceStore   nonceStoreBackend
 	chainID      int
 	challengeTTL time.Duration
 }
 
 // NewService creates a SIWE service.
 func NewService(domain, uri string, challengeTTL time.Duration, nonceLength int) *Service {
+	return NewServiceWithNonceStore(
+		domain,
+		uri,
+		challengeTTL,
+		wrapNonceStore(NewNonceStore(challengeTTL)),
+	)
+}
+
+// NewServiceWithNonceStore creates a SIWE service with a pluggable nonce store.
+func NewServiceWithNonceStore(
+	domain, uri string,
+	challengeTTL time.Duration,
+	store nonceStoreBackend,
+) *Service {
+	if store == nil {
+		store = wrapNonceStore(NewNonceStore(challengeTTL))
+	}
+
 	return &Service{
-		domain:     domain,
-		uri:        uri,
-		nonceStore: NewNonceStore(challengeTTL),
-		chainID:    1, // Ethereum mainnet; Sepolia = 11155111
+		domain:       domain,
+		uri:          uri,
+		nonceStore:   store,
+		chainID:      1, // Ethereum mainnet; Sepolia = 11155111
 		challengeTTL: challengeTTL,
 	}
 }
@@ -183,7 +201,11 @@ func (s *Service) Verify(signed *SignedMessage) (*VerifiedAuth, error) {
 	}
 
 	// Consume nonce (single-use)
-	if !s.nonceStore.Consume(parsed.nonce) {
+	ok, err := s.nonceStore.Consume(parsed.nonce)
+	if err != nil {
+		return nil, fmt.Errorf("validating nonce: %w", err)
+	}
+	if !ok {
 		return nil, fmt.Errorf("invalid or expired nonce")
 	}
 

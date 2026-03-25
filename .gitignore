@@ -28,6 +28,9 @@ zk/build/
 !.env.example
 !**/.env.example
 
+# Local build outputs
+gateway/gateway
+
 # White paper (not published in repo)
 WHITEPAPER.md
 

@@ -1,5 +1,8 @@
 # Release Gates
 
+For the execution-order checklist tied to the current anonymous paid beta path,
+see `BETA_LAUNCH_CHECKLIST.md`.
+
 ## Production Scale Gates
 
 - [ ] Node discovery and monitoring no longer depend on unbounded full-list reads from `NodeRegistry` (`getActiveNodes`, `getActiveNodesByRegion`, `getOverdueNodes`, and payout-service `getNodeList` path).
