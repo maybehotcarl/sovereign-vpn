@@ -38,6 +38,13 @@ function daysRemaining(expiresAt) {
   return diff / 86400000;
 }
 
+function formatDateTime(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString();
+}
+
 export default function SessionDashboard({ session, onDisconnect, onReconnect, onRenew }) {
   const [timeLeft, setTimeLeft] = useState(() => formatTimeLeft(session.expiresAt));
   const [disconnecting, setDisconnecting] = useState(false);
@@ -57,9 +64,15 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
     hash: renewTxHash,
   });
 
+  const isAnonymousAccess = session.accessMode === 'anonymous' || session.address === 'anonymous';
+  const subscriptionExpiresAt = session.subscriptionExpiresAt || null;
+  const subscriptionTimeLeft = subscriptionExpiresAt ? formatTimeLeft(subscriptionExpiresAt) : null;
+  const subscriptionExpired = Boolean(subscriptionExpiresAt) && !subscriptionTimeLeft;
+  const formattedSubscriptionExpiry = formatDateTime(subscriptionExpiresAt);
   const expired = !timeLeft;
-  const isSubscription = session.tier === 'subscription';
-  const showRenew = isSubscription && !expired && daysRemaining(session.expiresAt) < 7;
+  const isSubscription = session.tier === 'subscription' || Boolean(subscriptionExpiresAt);
+  const renewReferenceExpiry = subscriptionExpiresAt || session.expiresAt;
+  const showRenew = isSubscription && !(subscriptionExpiresAt ? subscriptionExpired : expired) && daysRemaining(renewReferenceExpiry) < 7;
 
   // Fetch payout info for the connected node operator
   useEffect(() => {
@@ -125,7 +138,10 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
     setRenewSelected(null);
     setRenewTxHash(null);
     try {
-      const resp = await fetch(`${session.gatewayUrl}/subscription/tiers`);
+      let resp = await fetch('/subscription/tiers');
+      if (!resp.ok) {
+        resp = await fetch(`${session.gatewayUrl}/subscription/tiers`);
+      }
       if (!resp.ok) throw new Error('Failed to fetch tiers');
       const data = await resp.json();
       setRenewTiers(data.tiers.map(t => ({
@@ -184,12 +200,20 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         <div className="dashboard-header expired">
           <div className="dashboard-status">
             <div className="status-dot offline" />
-            <span>{isSubscription ? 'Subscription Expired' : 'Session Expired'}</span>
+            <span>
+              {isAnonymousAccess
+                ? 'Anonymous Session Expired'
+                : isSubscription
+                  ? 'Subscription Expired'
+                  : 'Session Expired'}
+            </span>
           </div>
         </div>
         <div className="dashboard-body" style={{ textAlign: 'center' }}>
           <p style={{ color: 'var(--muted)', marginBottom: 20 }}>
-            Your VPN {isSubscription ? 'subscription' : 'session'} has expired. Reconnect to get a new configuration.
+            {isAnonymousAccess && formattedSubscriptionExpiry && !subscriptionExpired
+              ? `Your current anonymous VPN session expired. Your paid subscription is still active until ${formattedSubscriptionExpiry}. Reconnect to issue a fresh anonymous session.`
+              : `Your VPN ${isSubscription ? 'subscription' : 'session'} has expired. Reconnect to get a new configuration.`}
           </p>
           <div className="btn-row">
             <button className="btn-primary" onClick={onReconnect}>Reconnect</button>
@@ -208,15 +232,57 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           <div className="status-dot" />
           <span>VPN Connected</span>
         </div>
-        <div className="dashboard-tier">{isSubscription ? 'Subscription' : session.tier}</div>
+        <div className="dashboard-tier">
+          {isAnonymousAccess
+            ? 'Anonymous Session'
+            : isSubscription
+              ? 'Subscription'
+              : session.tier}
+        </div>
       </div>
 
       <div className="dashboard-body">
+        {isAnonymousAccess && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '12px',
+              border: '1px solid var(--border, #333)',
+              borderRadius: 8,
+              background: 'rgba(255,255,255,0.03)',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              Purchased access vs current connection
+            </div>
+            <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+              You bought a wallet subscription. This WireGuard config is a short-lived anonymous session issued from that subscription.
+              {formattedSubscriptionExpiry ? ` Subscription active until ${formattedSubscriptionExpiry}.` : ''}
+            </div>
+          </div>
+        )}
+
         <div className="dashboard-stats">
           <div className="stat">
-            <div className="stat-label">Time Remaining</div>
+            <div className="stat-label">
+              {isAnonymousAccess ? 'Anonymous Session Lease' : 'Time Remaining'}
+            </div>
             <div className="stat-value">{timeLeft}</div>
           </div>
+          {isAnonymousAccess && (
+            <div className="stat">
+              <div className="stat-label">Purchased Subscription</div>
+              <div className="stat-value">
+                {subscriptionTimeLeft || (formattedSubscriptionExpiry ? 'Active' : 'Unknown')}
+              </div>
+            </div>
+          )}
+          {isAnonymousAccess && formattedSubscriptionExpiry && (
+            <div className="stat">
+              <div className="stat-label">Subscription Active Until</div>
+              <div className="stat-value" style={{ fontSize: '0.9rem' }}>{formattedSubscriptionExpiry}</div>
+            </div>
+          )}
           <div className="stat">
             <div className="stat-label">Client IP</div>
             <div className="stat-value mono">{session.clientAddress}</div>

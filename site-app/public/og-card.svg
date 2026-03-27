@@ -1,0 +1,87 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="90" y1="48" x2="1112" y2="594" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10161A"/>
+      <stop offset="1" stop-color="#060809"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="164" y1="96" x2="1034" y2="548" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4ECDC4"/>
+      <stop offset="1" stop-color="#2A7A74"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(980 118) rotate(140.447) scale(408.198 346.147)">
+      <stop stop-color="#4ECDC4" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#4ECDC4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="630" rx="28" fill="url(#glow)"/>
+  <rect x="30" y="30" width="1140" height="570" rx="24" stroke="rgba(255,255,255,0.10)"/>
+
+  <rect x="72" y="76" width="166" height="40" rx="20" fill="rgba(78,205,196,0.12)" stroke="rgba(78,205,196,0.35)"/>
+  <text x="104" y="102" fill="#4ECDC4" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" letter-spacing="0.12em">6529 VPN</text>
+
+  <text x="74" y="192" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="66" font-weight="700">
+    Direct and Anonymous
+  </text>
+  <text x="74" y="260" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="66" font-weight="700">
+    WireGuard Access
+  </text>
+
+  <text x="76" y="322" fill="#A8B4BA" font-family="Arial, Helvetica, sans-serif" font-size="28">
+    Private VPN access for Memes holders.
+  </text>
+  <text x="76" y="360" fill="#A8B4BA" font-family="Arial, Helvetica, sans-serif" font-size="28">
+    Buy onchain subscriptions, then choose a regular wallet session
+  </text>
+  <text x="76" y="398" fill="#A8B4BA" font-family="Arial, Helvetica, sans-serif" font-size="28">
+    or a renewable anonymous session.
+  </text>
+
+  <g opacity="0.94">
+    <rect x="76" y="462" width="222" height="56" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.10)"/>
+    <circle cx="108" cy="490" r="8" fill="#4ECDC4"/>
+    <text x="128" y="497" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Direct Wallet Session</text>
+
+    <rect x="314" y="462" width="244" height="56" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.10)"/>
+    <circle cx="346" cy="490" r="8" fill="#A1F0EA"/>
+    <text x="366" y="497" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Anonymous Session</text>
+
+    <rect x="574" y="462" width="182" height="56" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.10)"/>
+    <circle cx="606" cy="490" r="8" fill="#FFC43D"/>
+    <text x="626" y="497" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Onchain Plans</text>
+  </g>
+
+  <g transform="translate(814 118)">
+    <rect width="298" height="388" rx="24" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.10)"/>
+    <text x="30" y="48" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700">Live Gateway Status</text>
+    <text x="30" y="78" fill="#8EA0A8" font-family="Arial, Helvetica, sans-serif" font-size="16">Response time and peer activity</text>
+
+    <rect x="30" y="108" width="92" height="84" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="48" y="136" fill="#8EA0A8" font-family="Arial, Helvetica, sans-serif" font-size="14">Health</text>
+    <text x="48" y="172" fill="#4ECDC4" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">Healthy</text>
+
+    <rect x="136" y="108" width="132" height="84" rx="18" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="154" y="136" fill="#8EA0A8" font-family="Arial, Helvetica, sans-serif" font-size="14">Response</text>
+    <text x="154" y="172" fill="#F4F7F8" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">142ms</text>
+
+    <line x1="30" y1="248" x2="268" y2="248" stroke="rgba(255,255,255,0.08)"/>
+    <line x1="30" y1="300" x2="268" y2="300" stroke="rgba(255,255,255,0.08)"/>
+    <line x1="30" y1="352" x2="268" y2="352" stroke="rgba(255,255,255,0.08)"/>
+
+    <rect x="38" y="332" width="12" height="44" rx="6" fill="rgba(78,205,196,0.44)"/>
+    <rect x="58" y="318" width="12" height="58" rx="6" fill="rgba(78,205,196,0.50)"/>
+    <rect x="78" y="286" width="12" height="90" rx="6" fill="rgba(78,205,196,0.58)"/>
+    <rect x="98" y="304" width="12" height="72" rx="6" fill="rgba(78,205,196,0.54)"/>
+    <rect x="118" y="268" width="12" height="108" rx="6" fill="rgba(78,205,196,0.64)"/>
+    <rect x="138" y="294" width="12" height="82" rx="6" fill="rgba(78,205,196,0.56)"/>
+    <rect x="158" y="274" width="12" height="102" rx="6" fill="rgba(78,205,196,0.62)"/>
+    <rect x="178" y="322" width="12" height="54" rx="6" fill="rgba(78,205,196,0.50)"/>
+    <rect x="198" y="288" width="12" height="88" rx="6" fill="rgba(78,205,196,0.60)"/>
+    <rect x="218" y="262" width="12" height="114" rx="6" fill="rgba(78,205,196,0.68)"/>
+    <rect x="238" y="308" width="12" height="68" rx="6" fill="rgba(78,205,196,0.52)"/>
+
+    <path d="M44 360 C74 334, 92 330, 118 320 S176 292, 204 302 S230 320, 252 286" stroke="url(#accent)" stroke-width="5" stroke-linecap="round" fill="none"/>
+    <circle cx="252" cy="286" r="6" fill="#F4F7F8"/>
+  </g>
+</svg>

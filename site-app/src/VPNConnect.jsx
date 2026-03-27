@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { useAccount, useSignMessage, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, usePublicClient, useSignMessage, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { generateKeyPair } from './wgkeys';
@@ -58,6 +58,8 @@ const TIER_LABELS = {
   '365d': '365 Days',
 };
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
 async function readResponsePayload(response) {
   const text = await response.text();
   if (!text) {
@@ -85,6 +87,41 @@ function responseErrorMessage(payload, fallback) {
   return fallback;
 }
 
+function endpointCandidates(baseUrl, path, { preferSameOrigin = false } = {}) {
+  const candidates = [];
+  if (preferSameOrigin) {
+    candidates.push(path);
+  }
+  if (baseUrl) {
+    candidates.push(`${baseUrl}${path}`);
+  }
+  if (!preferSameOrigin) {
+    candidates.push(path);
+  }
+  return [...new Set(candidates)];
+}
+
+async function fetchFirstOkJson(urls, timeoutMs = 3000) {
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        continue;
+      }
+      const payload = await readResponsePayload(response);
+      if (payload && typeof payload === 'object') {
+        return payload;
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 function formatDuration(seconds) {
   const days = Math.floor(seconds / 86400);
   if (days >= 365) return '365d';
@@ -94,11 +131,74 @@ function formatDuration(seconds) {
   return '24h';
 }
 
+function shortenAddress(address) {
+  if (!address || address.length < 10) {
+    return address;
+  }
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function normalizeDateValue(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  if (typeof value === 'string' && value.includes('T')) {
+    return value;
+  }
+  try {
+    return new Date(Number(value) * 1000).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+async function loadManagerSettlement(publicClient, contractAddress, abi) {
+  if (!publicClient || !contractAddress) {
+    return null;
+  }
+
+  try {
+    const [operatorShareBps, treasury, payoutVault] = await Promise.all([
+      publicClient.readContract({
+        address: contractAddress,
+        abi,
+        functionName: 'operatorShareBps',
+      }),
+      publicClient.readContract({
+        address: contractAddress,
+        abi,
+        functionName: 'treasury',
+      }),
+      publicClient.readContract({
+        address: contractAddress,
+        abi,
+        functionName: 'payoutVault',
+      }),
+    ]);
+
+    return {
+      contract: contractAddress,
+      operatorShareBps: Number(operatorShareBps),
+      treasuryShareBps: 10000 - Number(operatorShareBps),
+      treasury,
+      payoutVault,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
   const { signMessageAsync } = useSignMessage();
   const { writeContractAsync } = useWriteContract();
-  const anonMode = anonymousVPNEnabled();
+  const anonymousAvailable = anonymousVPNEnabled();
+  const [accessMode, setAccessMode] = useState(() =>
+    anonymousAvailable ? 'anonymous' : 'direct'
+  );
+  const usingAnonymousMode =
+    anonymousAvailable && accessMode === 'anonymous';
 
   const [phase, setPhase] = useState('idle'); // idle | running | payment | success | error
   const [steps, setSteps] = useState(FREE_STEPS);
@@ -131,13 +231,19 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     includeSessionOption,
     requireSubscriptionOptions,
   }) => {
-    const [sessionResp, subResp] = await Promise.all([
-      fetch(`${gatewayUrl}/session/info`).catch(() => null),
-      fetch(`${gatewayUrl}/subscription/tiers`).catch(() => null),
+    const [sessionInfo, subTiers] = await Promise.all([
+      fetchFirstOkJson(
+        endpointCandidates(gatewayUrl, '/session/info', { preferSameOrigin: true })
+      ),
+      fetchFirstOkJson(
+        endpointCandidates(gatewayUrl, '/subscription/tiers', { preferSameOrigin: true })
+      ),
     ]);
 
-    const sessionInfo = sessionResp && sessionResp.ok ? await sessionResp.json() : null;
-    const subTiers = subResp && subResp.ok ? await subResp.json() : null;
+    const [sessionSettlement, subscriptionSettlement] = await Promise.all([
+      loadManagerSettlement(publicClient, sessionInfo?.contract || '', SESSION_MANAGER_ABI),
+      loadManagerSettlement(publicClient, subTiers?.contract || '', SUBSCRIPTION_MANAGER_ABI),
+    ]);
 
     if (!sessionInfo?.node_operator) {
       throw new Error('Gateway does not expose node purchase info for subscriptions.');
@@ -160,6 +266,12 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
             : null,
         contract: sessionInfo.contract || '',
         chainId: sessionInfo.chain_id,
+        settlement: sessionSettlement,
+      },
+      subscription: {
+        contract: subTiers?.contract || '',
+        chainId: subTiers?.chain_id,
+        settlement: subscriptionSettlement,
       },
       subscriptions: subTiers
         ? subTiers.tiers.map(t => ({
@@ -173,7 +285,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           }))
         : [],
     };
-  }, [gatewayUrl]);
+  }, [gatewayUrl, publicClient]);
 
   const finalizeVPNProvision = useCallback(async (vpnData, keys, sessionMeta) => {
     const resolvedGatewayUrl = vpnData.gateway_url || gatewayUrl;
@@ -209,9 +321,13 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     if (onSessionCreated) {
       onSessionCreated({
         address: sessionMeta.address,
+        accessMode: sessionMeta.accessMode || 'wallet',
         sessionToken: sessionMeta.sessionToken,
         tier: vpnData.tier,
         expiresAt: vpnData.expires_at,
+        subscriptionExpiresAt: sessionMeta.subscriptionExpiresAt || null,
+        entitlementExpiresAt: sessionMeta.entitlementExpiresAt || null,
+        refreshAt: sessionMeta.refreshAt || null,
         serverEndpoint: vpnData.server_endpoint,
         clientAddress: vpnData.client_address,
         serverPublicKey: vpnData.server_public_key,
@@ -230,7 +346,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setTimeout(() => setPhase('success'), 400);
   }, [gatewayUrl, onSessionCreated, tierOptions]);
 
-  const provisionVPN = useCallback(async (vData, stepIdx) => {
+  const provisionVPN = useCallback(async (vData, stepIdx, sessionMeta = {}) => {
     setCurrentStep(stepIdx);
     const keys = generateKeyPair();
 
@@ -255,6 +371,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     await finalizeVPNProvision(vpnData, keys, {
       address: vData.address,
       sessionToken: vData.session_token,
+      ...sessionMeta,
     });
   }, [finalizeVPNProvision, gatewayUrl]);
 
@@ -344,6 +461,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       }
       throw error;
     }
+    const issuerResult = issuerEntitlement?.result ?? null;
     if (issuerEntitlement) {
       markDone(
         1,
@@ -426,6 +544,14 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     await finalizeVPNProvision(vpnData, keys, {
       address: 'anonymous',
       sessionToken: vpnData.session_token,
+      accessMode: 'anonymous',
+      subscriptionExpiresAt: normalizeDateValue(
+        issuerResult?.entitlement?.metadata?.subscriptionExpiresAt
+      ),
+      entitlementExpiresAt: normalizeDateValue(
+        issuerResult?.entitlementExpiresAt
+      ),
+      refreshAt: normalizeDateValue(issuerResult?.refreshAt),
     });
   }, [
     address,
@@ -438,7 +564,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
   const startVPN = useCallback(async () => {
     setPhase('running');
-    setSteps(anonMode ? ANON_STEPS : FREE_STEPS);
+    setSteps(usingAnonymousMode ? ANON_STEPS : FREE_STEPS);
     setCurrentStep(0);
     setCompletedSteps({});
     setErrorMsg('');
@@ -450,7 +576,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setTierOptions(null);
 
     try {
-      if (anonMode) {
+      if (usingAnonymousMode) {
         await startAnonymousVPN();
         return;
       }
@@ -501,6 +627,16 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
       // If paid tier, fetch pricing and show tier picker
       if (vData.tier === 'paid' && SESSION_MANAGER_ADDRESS) {
+        try {
+          await provisionVPN(vData, 3, { accessMode: 'wallet' });
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!message.includes('on-chain payment required for paid tier')) {
+            throw err;
+          }
+        }
+
         setSteps(PAID_STEPS);
         setVerifyData(vData);
         setPaymentIntent({ kind: 'legacy-connect' });
@@ -528,7 +664,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [address, anonMode, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync, startAnonymousVPN]);
+  }, [address, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync, startAnonymousVPN, usingAnonymousMode]);
 
   const handlePayAndConnect = useCallback(async () => {
     if (!selectedTier || !tierOptions) return;
@@ -638,7 +774,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
   const reset = () => {
     setPhase('idle');
-    setSteps(FREE_STEPS);
+    setSteps(usingAnonymousMode ? ANON_STEPS : FREE_STEPS);
     setCurrentStep(-1);
     setCompletedSteps({});
     setErrorMsg('');
@@ -664,15 +800,101 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     })),
   ] : [];
 
+  const selectedSettlement = (() => {
+    if (!tierOptions) return null;
+    if (paymentIntent?.kind === 'anon-subscription') {
+      return tierOptions.subscription?.settlement || null;
+    }
+    if (selectedTier === '24h') {
+      return tierOptions.session?.settlement || null;
+    }
+    if (selectedTier && selectedTier !== '24h') {
+      return tierOptions.subscription?.settlement || null;
+    }
+    return tierOptions.session?.settlement || tierOptions.subscription?.settlement || null;
+  })();
+
+  const selectedContractAddress = (() => {
+    if (!tierOptions) return '';
+    if (paymentIntent?.kind === 'anon-subscription') {
+      return tierOptions.subscription?.contract || '';
+    }
+    if (selectedTier === '24h') {
+      return tierOptions.session?.contract || '';
+    }
+    if (selectedTier && selectedTier !== '24h') {
+      return tierOptions.subscription?.contract || '';
+    }
+    return tierOptions.subscription?.contract || tierOptions.session?.contract || '';
+  })();
+
   return (
     <div className="connect-section">
       <div className="connect-box">
         <h2 style={{ marginBottom: 12 }}>Connect & Get VPN Config</h2>
         <p style={{ color: 'var(--muted)', marginBottom: 24 }}>
-          {anonMode
-            ? 'Anonymous paid access beta: connect your wallet only to activate or refresh this browser entitlement, then the browser proves access locally and connects to the gateway anonymously.'
-            : 'Sign in with your wallet to verify your Memes card and get a WireGuard config file.'}
+          {usingAnonymousMode
+            ? 'Anonymous paid access beta: buying a subscription pays for wallet-level access, but each VPN config is issued as a short-lived anonymous session. Your wallet is used only to activate or refresh this browser entitlement; the browser then proves access locally and connects to the gateway anonymously.'
+            : 'Direct wallet mode gives you a normal wallet-bound VPN session without the short anonymous lease. Use this if you want a more typical VPN experience.'}
         </p>
+
+        {phase === 'idle' && anonymousAvailable && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: 10, fontWeight: 600 }}>Choose access mode</div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 12,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setAccessMode('direct')}
+                style={{
+                  textAlign: 'left',
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  border: accessMode === 'direct'
+                    ? '1px solid var(--accent, #4ecdc4)'
+                    : '1px solid var(--border, #333)',
+                  background: accessMode === 'direct'
+                    ? 'rgba(78,205,196,0.08)'
+                    : 'rgba(255,255,255,0.03)',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Direct Wallet Session</div>
+                <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                  Regular wallet-bound VPN use. Better for everyday use because you are not reconnecting on a 30-minute anonymous lease.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAccessMode('anonymous')}
+                style={{
+                  textAlign: 'left',
+                  padding: '14px 16px',
+                  borderRadius: 10,
+                  border: accessMode === 'anonymous'
+                    ? '1px solid var(--accent, #4ecdc4)'
+                    : '1px solid var(--border, #333)',
+                  background: accessMode === 'anonymous'
+                    ? 'rgba(78,205,196,0.08)'
+                    : 'rgba(255,255,255,0.03)',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Anonymous Session</div>
+                <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                  Better privacy. The browser proves access locally, but the resulting VPN session is intentionally short-lived and renewable.
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Wallet connect is required for legacy flow and issuer-backed anonymous activation */}
         {phase === 'idle' && (
@@ -681,17 +903,23 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           </div>
         )}
 
-        {phase === 'idle' && anonMode && (
+        {phase === 'idle' && usingAnonymousMode && (
           <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
             Activate Anonymous Access & Get VPN Config
           </button>
         )}
 
         {/* Idle: show sign-in button once wallet is connected */}
-        {phase === 'idle' && !anonMode && isConnected && (
+        {phase === 'idle' && !usingAnonymousMode && isConnected && (
           <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
             Sign In & Get VPN Config
           </button>
+        )}
+
+        {phase === 'idle' && !usingAnonymousMode && !isConnected && (
+          <p style={{ color: 'var(--muted)', marginTop: 16, fontSize: '0.85rem' }}>
+            Connect your wallet to start a direct wallet-bound VPN session.
+          </p>
         )}
 
         {/* Running: show step progress */}
@@ -741,8 +969,39 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                 <p style={{ color: 'var(--muted)', fontSize: '0.85rem', marginBottom: 16 }}>
                   {paymentIntent?.kind === 'anon-subscription'
                     ? 'Anonymous access requires an active paid subscription on this wallet. After confirmation, the site will retry anonymous activation automatically.'
-                    : 'Paid directly to the smart contract. 80% goes to the node operator, 20% to treasury.'}
+                    : 'Paid directly to the live mainnet smart contract. Funds are routed by the current on-chain payout configuration.'}
                 </p>
+
+                <div style={{
+                  marginBottom: 16,
+                  padding: '12px',
+                  border: '1px solid var(--border, #333)',
+                  borderRadius: 8,
+                  background: 'rgba(255,255,255,0.03)',
+                  fontSize: '0.85rem',
+                  color: 'var(--muted)',
+                }}>
+                  <div style={{ marginBottom: 6 }}>
+                    Payment contract: <code>{selectedContractAddress || 'Unavailable'}</code>
+                  </div>
+                  {selectedSettlement ? (
+                    <>
+                      <div style={{ marginBottom: 6 }}>
+                        Current on-chain split: {selectedSettlement.operatorShareBps / 100}% operator, {selectedSettlement.treasuryShareBps / 100}% treasury
+                      </div>
+                      <div style={{ marginBottom: 6 }}>
+                        Treasury: <code title={selectedSettlement.treasury}>{shortenAddress(selectedSettlement.treasury)}</code>
+                      </div>
+                      {selectedSettlement.operatorShareBps > 0 && selectedSettlement.payoutVault && selectedSettlement.payoutVault !== ZERO_ADDRESS && (
+                        <div>
+                          Operator payouts route via vault: <code title={selectedSettlement.payoutVault}>{shortenAddress(selectedSettlement.payoutVault)}</code>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div>Current treasury and split could not be read from the contract.</div>
+                  )}
+                </div>
 
                 <div className="tier-picker">
                   {allTierOptions.map(opt => (

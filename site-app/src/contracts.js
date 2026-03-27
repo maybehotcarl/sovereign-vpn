@@ -25,6 +25,27 @@ export const SESSION_MANAGER_ABI = [
     stateMutability: 'view',
     type: 'function',
   },
+  {
+    inputs: [],
+    name: 'operatorShareBps',
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [],
+    name: 'treasury',
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [],
+    name: 'payoutVault',
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
 ];
 
 export const NODE_REGISTRY_ADDRESS = import.meta.env.VITE_NODE_REGISTRY || '';
@@ -100,6 +121,27 @@ export const SUBSCRIPTION_MANAGER_ABI = [
         type: 'tuple',
       },
     ],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [],
+    name: 'operatorShareBps',
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [],
+    name: 'treasury',
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [],
+    name: 'payoutVault',
+    outputs: [{ name: '', type: 'address' }],
     stateMutability: 'view',
     type: 'function',
   },
