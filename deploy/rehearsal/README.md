@@ -46,8 +46,12 @@ Health checks:
 
 ```bash
 curl -s http://127.0.0.1:3002/api/health | jq
-curl -s http://127.0.0.1:3002/api/meta | jq '.vpnAccess'
+curl -s http://127.0.0.1:3002/api/meta | jq '.anonymousVpn'
 ```
+
+If `anonymousVpn.activeRoot` is `null`, there is no live anonymous entitlement published right now.
+Run a real anonymous issuer activation from a subscribed wallet before expecting scripted
+`vpn_access_v1` proof generation to work.
 
 ## 4. Start Redis + two gateways
 

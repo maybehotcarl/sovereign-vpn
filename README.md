@@ -158,6 +158,7 @@ sudo wg-quick up ./sovereign-vpn.conf
 ```
 
 See [deploy/setup-node.sh](deploy/setup-node.sh) for full VPS setup.
+For updating the public droplet that serves `6529vpn.io`, see [deploy/DROPLET_DEPLOY.md](deploy/DROPLET_DEPLOY.md).
 
 ## Repository Structure
 

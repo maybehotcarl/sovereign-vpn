@@ -35,17 +35,17 @@ const PAID_STEPS = [
 ];
 
 const ANON_STEPS = [
-  { id: 'challenge', label: 'Requesting anonymous challenge...' },
   { id: 'entitlement', label: 'Refreshing anonymous credential...' },
+  { id: 'challenge', label: 'Requesting anonymous challenge...' },
   { id: 'prove', label: 'Generating anonymous access proof...' },
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
 
 const ANON_PAYMENT_STEPS = [
-  { id: 'challenge', label: 'Requesting anonymous challenge...' },
   { id: 'entitlement', label: 'Checking anonymous entitlement...' },
   { id: 'payment', label: 'Confirm subscription in your wallet...' },
   { id: 'confirm', label: 'Waiting for transaction confirmation...' },
+  { id: 'challenge', label: 'Requesting anonymous challenge...' },
   { id: 'prove', label: 'Generating anonymous access proof...' },
   { id: 'vpn', label: 'Provisioning VPN connection...' },
 ];
@@ -59,6 +59,10 @@ const TIER_LABELS = {
 };
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+function subscriptionOptionKey(tierId) {
+  return `subscription:${tierId}`;
+}
 
 async function readResponsePayload(response) {
   const text = await response.text();
@@ -215,7 +219,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const [paymentIntent, setPaymentIntent] = useState(null); // null | { kind: 'legacy-connect' | 'anon-subscription' }
 
   // Tier picker state
-  const [selectedTier, setSelectedTier] = useState(null); // '24h' or tier object from API
+  const [selectedTier, setSelectedTier] = useState(null); // '24h' or `subscription:<tierId>`
   const [tierOptions, setTierOptions] = useState(null); // { mode, session, subscriptions }
 
   // Watch for tx confirmation
@@ -382,33 +386,6 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       throw new Error(`Anonymous access is not configured: ${configProblems.join('; ')}`);
     }
 
-    const challengeResp = await fetch(`${gatewayUrl}/auth/anonymous/challenge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!challengeResp.ok) {
-      const err = await readResponsePayload(challengeResp);
-      if (challengeResp.status === 404) {
-        throw new Error(
-          'Anonymous access is not available on the selected gateway.'
-        );
-      }
-      throw new Error(responseErrorMessage(err, 'Failed to get anonymous challenge'));
-    }
-    const challenge = await readResponsePayload(challengeResp);
-    if (!challenge || typeof challenge !== 'object') {
-      throw new Error('Gateway returned an invalid anonymous challenge response');
-    }
-    if (challenge.proof_type !== 'vpn_access_v1') {
-      throw new Error(`Unsupported anonymous proof type: ${challenge.proof_type}`);
-    }
-    markDone(0, `Challenge received for epoch ${challenge.policy_epoch}`);
-
-    setCurrentStep(1);
-    const keys = generateKeyPair();
-    const challengeHash = await deriveVPNAccessV1ChallengeHash(challenge);
-    const sessionKeyHash = await deriveVPNAccessV1SessionKeyHash(keys.publicKey);
-
     const { ZKClient } = await import('../6529-zk-service/dist/browser/index.js');
     const zkClient = new ZKClient({
       apiUrl: config.apiUrl,
@@ -435,7 +412,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         isConnected,
         signMessageAsync,
         identityCommitment,
-        policyEpoch: challenge.policy_epoch,
+        policyEpoch: anonymousMeta?.policy?.policyEpoch,
       });
     } catch (error) {
       if (
@@ -447,15 +424,14 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           requireSubscriptionOptions: true,
         });
         setSteps(ANON_PAYMENT_STEPS);
-        markDone(0, `Challenge received for epoch ${challenge.policy_epoch}`);
-        markDone(1, 'Supported card verified; subscription required');
+        markDone(0, 'Supported card verified; subscription required');
         setTierOptions({
           mode: 'anon-subscription',
           ...paymentOptions,
         });
         setSelectedTier(null);
         setPaymentIntent({ kind: 'anon-subscription' });
-        setCurrentStep(2);
+        setCurrentStep(1);
         setPhase('payment');
         return;
       }
@@ -464,7 +440,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     const issuerResult = issuerEntitlement?.result ?? null;
     if (issuerEntitlement) {
       markDone(
-        1,
+        0,
         issuerEntitlement.mode === 'refreshed'
           ? 'Anonymous credential refreshed'
           : 'Anonymous credential activated'
@@ -479,16 +455,48 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           });
       await registrationClient.registerVPNAccessDevEntitlement({
         identityCommitment,
-        policyEpoch: challenge.policy_epoch,
+        policyEpoch: anonymousMeta?.policy?.policyEpoch,
         registrationToken: config.devRegistrationToken,
         metadata: {
           source: 'site-app',
         },
       });
-      markDone(1, 'Anonymous entitlement published');
+      markDone(0, 'Anonymous entitlement published');
     } else {
       throw new Error('Anonymous issuer did not return an entitlement result.');
     }
+
+    const challengeResp = await fetch(`${gatewayUrl}/auth/anonymous/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!challengeResp.ok) {
+      const err = await readResponsePayload(challengeResp);
+      if (challengeResp.status === 404) {
+        throw new Error(
+          'Anonymous access is not available on the selected gateway.'
+        );
+      }
+      const message = responseErrorMessage(err, 'Failed to get anonymous challenge');
+      if (message.includes('anonymous policy metadata unavailable')) {
+        throw new Error(
+          'Anonymous access is still publishing on the gateway. Retry in a few seconds.'
+        );
+      }
+      throw new Error(message);
+    }
+    const challenge = await readResponsePayload(challengeResp);
+    if (!challenge || typeof challenge !== 'object') {
+      throw new Error('Gateway returned an invalid anonymous challenge response');
+    }
+    if (challenge.proof_type !== 'vpn_access_v1') {
+      throw new Error(`Unsupported anonymous proof type: ${challenge.proof_type}`);
+    }
+    markDone(1, `Challenge received for epoch ${challenge.policy_epoch}`);
+
+    const keys = generateKeyPair();
+    const challengeHash = await deriveVPNAccessV1ChallengeHash(challenge);
+    const sessionKeyHash = await deriveVPNAccessV1SessionKeyHash(keys.publicKey);
 
     setCurrentStep(2);
     let proofResult;
@@ -672,9 +680,9 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     try {
       let hash;
       const paymentStepIndex =
-        paymentIntent?.kind === 'anon-subscription' ? 2 : 3;
+        paymentIntent?.kind === 'anon-subscription' ? 1 : 3;
       const confirmStepIndex =
-        paymentIntent?.kind === 'anon-subscription' ? 3 : 4;
+        paymentIntent?.kind === 'anon-subscription' ? 2 : 4;
 
       if (tierOptions.mode === 'legacy' && selectedTier === '24h') {
         // 24h session via SessionManager
@@ -688,7 +696,9 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         });
       } else {
         // Subscription via SubscriptionManager
-        const tier = tierOptions.subscriptions.find(t => t.durationKey === selectedTier);
+        const tier = tierOptions.subscriptions.find(
+          t => subscriptionOptionKey(t.id) === selectedTier
+        );
         if (!tier) {
           throw new Error('Select a valid subscription plan.');
         }
@@ -732,7 +742,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
   const continueAnonymousAfterSubscription = useCallback(async () => {
     try {
-      markDone(3, 'Subscription confirmed');
+      markDone(2, 'Subscription confirmed');
       await startVPN();
     } catch (err) {
       console.error(err);
@@ -794,9 +804,10 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       { key: '24h', label: '24 Hours', price: tierOptions.session.costEth },
     ] : []),
     ...tierOptions.subscriptions.map(t => ({
-      key: t.durationKey,
+      key: subscriptionOptionKey(t.id),
       label: TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`,
       price: t.costEth,
+      tierId: t.id,
     })),
   ] : [];
 
