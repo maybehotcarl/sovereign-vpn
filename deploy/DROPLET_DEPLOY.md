@@ -20,7 +20,6 @@ For the anonymous path, the frontend also needs a public `zk-api` URL. The site 
 
 1. Make sure the code you want to deploy exists on a remote branch for:
    - `sovereign-vpn`
-   - `site-app/6529-zk-service`
    - `site-app/6529-zk-api` if the public `zk-api` is also deployed from this machine
 2. Confirm the public ZK API URL you want the browser to use.
 3. Confirm CORS on that `zk-api` allows `https://6529vpn.io`.
@@ -52,33 +51,13 @@ On the droplet:
 cd /home/maybe/sovereign-vpn
 
 export ROOT_BRANCH=checkpoint/launch-hardening-2026-03-25
-export ZK_SERVICE_BRANCH=checkpoint/launch-hardening-2026-03-25
 
 git fetch origin
 git switch "$ROOT_BRANCH"
 git pull --ff-only origin "$ROOT_BRANCH"
 ```
 
-If the sibling `6529-zk-service` repo is not present yet:
-
-```bash
-mkdir -p /home/maybe/sovereign-vpn/site-app
-git clone git@github.com:maybehotcarl/6529-zk-service.git \
-  /home/maybe/sovereign-vpn/site-app/6529-zk-service
-```
-
-Update and build the browser SDK first:
-
-```bash
-cd /home/maybe/sovereign-vpn/site-app/6529-zk-service
-git fetch origin
-git switch "$ZK_SERVICE_BRANCH"
-git pull --ff-only origin "$ZK_SERVICE_BRANCH"
-npm ci
-npm run build
-```
-
-Then build the public frontend:
+Build the public frontend:
 
 ```bash
 cd /home/maybe/sovereign-vpn/site-app

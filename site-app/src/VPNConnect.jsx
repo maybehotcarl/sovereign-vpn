@@ -395,7 +395,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       throw new Error(`Anonymous access is not configured: ${configProblems.join('; ')}`);
     }
 
-    const { ZKClient } = await import('../6529-zk-service/dist/browser/index.js');
+    const { ZKClient } = await import('@6529/zk-service/browser');
     const zkClient = new ZKClient({
       apiUrl: config.apiUrl,
       artifactBaseUrl: config.artifactBaseUrl,
