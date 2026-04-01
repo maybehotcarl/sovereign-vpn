@@ -525,6 +525,11 @@ footer a:hover { color: var(--accent); }
   color: var(--accent);
 }
 
+.tier-option-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .tier-savings {
   font-size: 0.7rem;
   color: var(--success);

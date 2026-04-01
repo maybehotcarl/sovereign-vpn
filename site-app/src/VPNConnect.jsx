@@ -135,6 +135,15 @@ function formatDuration(seconds) {
   return '24h';
 }
 
+function formatSubscriptionOptionLabel(durationSeconds) {
+  const days = Math.floor(durationSeconds / 86400);
+  if (days >= 365) return '365 Days';
+  if (days >= 90) return '90 Days';
+  if (days >= 30) return '30 Days';
+  if (days >= 7) return '7 Days';
+  return '24 Hours';
+}
+
 function shortenAddress(address) {
   if (!address || address.length < 10) {
     return address;
@@ -799,17 +808,47 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   };
 
   // Build tier options for the picker
+  const subscriptionLabelCounts = tierOptions
+    ? tierOptions.subscriptions.reduce((counts, tier) => {
+        const label = formatSubscriptionOptionLabel(tier.duration);
+        counts[label] = (counts[label] || 0) + 1;
+        return counts;
+      }, {})
+    : {};
+
   const allTierOptions = tierOptions ? [
     ...(tierOptions.mode === 'legacy' && tierOptions.session?.costEth ? [
-      { key: '24h', label: '24 Hours', price: tierOptions.session.costEth },
+      {
+        key: '24h',
+        label: '24 Hours',
+        price: tierOptions.session.costEth,
+        description: 'Single paid session',
+      },
     ] : []),
-    ...tierOptions.subscriptions.map(t => ({
-      key: subscriptionOptionKey(t.id),
-      label: TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`,
-      price: t.costEth,
-      tierId: t.id,
-    })),
+    ...tierOptions.subscriptions.map(t => {
+      const label =
+        TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`;
+      const isFreeTier = BigInt(t.costWei) === 0n;
+      const hasDuplicateDuration = (subscriptionLabelCounts[label] || 0) > 1;
+
+      let description = null;
+      if (isFreeTier) {
+        description = 'Free tier';
+      } else if (hasDuplicateDuration) {
+        description = `Tier ${t.id}`;
+      }
+
+      return {
+        key: subscriptionOptionKey(t.id),
+        label,
+        price: t.costEth,
+        tierId: t.id,
+        description,
+      };
+    }),
   ] : [];
+
+  const selectedTierOption = allTierOptions.find(option => option.key === selectedTier) || null;
 
   const selectedSettlement = (() => {
     if (!tierOptions) return null;
@@ -1018,17 +1057,29 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
                   {allTierOptions.map(opt => (
                     <button
                       key={opt.key}
+                      type="button"
                       className={`tier-option${selectedTier === opt.key ? ' selected' : ''}`}
+                      aria-pressed={selectedTier === opt.key}
                       onClick={() => setSelectedTier(opt.key)}
                     >
                       <span className="tier-option-label">{opt.label}</span>
                       <span className="tier-option-price">{opt.price} ETH</span>
+                      {opt.description && (
+                        <span className="tier-option-meta">{opt.description}</span>
+                      )}
                       {paymentIntent?.kind !== 'anon-subscription' && opt.key !== '24h' && (
                         <span className="tier-savings">Save vs daily</span>
                       )}
                     </button>
                   ))}
                 </div>
+
+                {selectedTierOption && (
+                  <p style={{ color: 'var(--muted)', fontSize: '0.85rem', marginTop: 12 }}>
+                    Selected plan: {selectedTierOption.label} • {selectedTierOption.price} ETH
+                    {selectedTierOption.description ? ` • ${selectedTierOption.description}` : ''}
+                  </p>
+                )}
 
                 <button
                   className="btn-primary"
