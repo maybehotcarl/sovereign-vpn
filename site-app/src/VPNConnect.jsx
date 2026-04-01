@@ -826,14 +826,20 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       },
     ] : []),
     ...tierOptions.subscriptions.map(t => {
-      const label =
+      const baseLabel =
         TIER_LABELS[t.durationKey] || `${Math.floor(t.duration / 86400)} Days`;
       const isFreeTier = BigInt(t.costWei) === 0n;
-      const hasDuplicateDuration = (subscriptionLabelCounts[label] || 0) > 1;
+      const hasDuplicateDuration = (subscriptionLabelCounts[baseLabel] || 0) > 1;
+
+      const label = hasDuplicateDuration
+        ? isFreeTier
+          ? `${baseLabel} (Free)`
+          : `${baseLabel} (${t.costEth} ETH)`
+        : baseLabel;
 
       let description = null;
       if (isFreeTier) {
-        description = 'Free tier';
+        description = hasDuplicateDuration ? 'Temporary free tier' : 'Free tier';
       } else if (hasDuplicateDuration) {
         description = `Tier ${t.id}`;
       }
