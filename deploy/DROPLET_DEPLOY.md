@@ -14,7 +14,15 @@ It assumes the current top-level [Caddyfile](/home/maybe/repos/sovereign-vpn/Cad
 
 Use this when you want the public site to reflect the current repo state and the current gateway behavior.
 
-For the anonymous path, the frontend also needs a public `zk-api` URL. The site deploy alone does not update that service.
+The current droplet layout is:
+
+- repo checkout: `/root/sovereign-vpn`
+- static web root: `/var/www/6529vpn`
+- public gateway service: `sovereign-gateway.service`
+
+`site-app` now consumes `@6529/zk-service` as a normal package dependency. You do not need a sibling `site-app/6529-zk-service` checkout on the droplet just to build the frontend.
+
+For the anonymous path, the frontend also needs a public `zk-api` URL and the public gateway must be started with `--zk-api-url`. The site deploy alone does not update that service.
 
 ## Preflight
 
@@ -35,11 +43,11 @@ VITE_CHAIN=mainnet
 VITE_SESSION_MANAGER=0xb644c990c884911670adc422719243D9F76Df0d6
 VITE_SUBSCRIPTION_MANAGER=0xEb54c8604b7EEADE804d121BD8f158A006827882
 VITE_NODE_REGISTRY=0x1Fd64c16c745e373428068eB52AA73525576B594
-VITE_ENABLE_ANON_VPN=true
+VITE_ENABLE_ANON_VPN=false
 VITE_ENABLE_ANON_VPN_DEV_REGISTRATION=false
-VITE_ZK_API_URL=https://<public-zk-api-domain>
-VITE_ZK_ARTIFACT_BASE_URL=https://<public-zk-api-domain>/api/artifacts
 ```
+
+Enable anonymous mode only after the public `zk-api` exists and the live gateway is configured to talk to it.
 
 Do not copy local dev values like `127.0.0.1:3002` or `127.0.0.1:8081` into the public build.
 
@@ -48,7 +56,7 @@ Do not copy local dev values like `127.0.0.1:3002` or `127.0.0.1:8081` into the 
 On the droplet:
 
 ```bash
-cd /home/maybe/sovereign-vpn
+cd /root/sovereign-vpn
 
 export ROOT_BRANCH=checkpoint/launch-hardening-2026-03-25
 
@@ -60,23 +68,30 @@ git pull --ff-only origin "$ROOT_BRANCH"
 Build the public frontend:
 
 ```bash
-cd /home/maybe/sovereign-vpn/site-app
+cd /root/sovereign-vpn/site-app
 npm ci
 npm run build
 ```
 
-Update the gateway container:
+Publish the built frontend:
 
 ```bash
-cd /home/maybe/sovereign-vpn/node
-docker compose up -d --build
+rm -rf /var/www/6529vpn/*
+cp -R dist/* /var/www/6529vpn/
+```
+
+If the gateway binary or config changed:
+
+```bash
+systemctl restart sovereign-gateway
+systemctl status sovereign-gateway --no-pager
 ```
 
 If the Caddy config changed:
 
 ```bash
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload caddy
 ```
 
 If only `site-app/dist` changed, Caddy does not need a reload.
@@ -89,13 +104,13 @@ If the sibling `6529-zk-api` repo is missing:
 
 ```bash
 git clone https://github.com/maybehotcarl/6529-zk-api.git \
-  /home/maybe/sovereign-vpn/site-app/6529-zk-api
+  /root/sovereign-vpn/site-app/6529-zk-api
 ```
 
 Then:
 
 ```bash
-cd /home/maybe/sovereign-vpn/site-app/6529-zk-api
+cd /root/sovereign-vpn/site-app/6529-zk-api
 
 export ZK_API_BRANCH=checkpoint/launch-hardening-2026-03-25
 
@@ -143,17 +158,17 @@ curl -s https://<public-zk-api-domain>/api/meta | jq '.anonymousVpn'
 If the new deploy is bad:
 
 ```bash
-cd /home/maybe/sovereign-vpn
+cd /root/sovereign-vpn
 git log --oneline -n 5
 git switch <last-known-good-branch-or-tag>
 git pull --ff-only
 
-cd /home/maybe/sovereign-vpn/site-app
+cd /root/sovereign-vpn/site-app
 npm ci
 npm run build
 
-cd /home/maybe/sovereign-vpn/node
-docker compose up -d --build
+rm -rf /var/www/6529vpn/*
+cp -R dist/* /var/www/6529vpn/
 ```
 
 If the public `zk-api` was updated on the same droplet, roll that branch/service back separately too.
