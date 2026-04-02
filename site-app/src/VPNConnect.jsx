@@ -362,6 +362,13 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const provisionVPN = useCallback(async (vData, stepIdx, sessionMeta = {}) => {
     setCurrentStep(stepIdx);
     const keys = generateKeyPair();
+    if (!keys?.publicKey) {
+      throw new Error('Browser failed to generate a WireGuard public key.');
+    }
+    if (!vData?.session_token) {
+      console.error('Gateway verify response missing session_token', vData);
+      throw new Error('Gateway auth response is missing a session token.');
+    }
 
     const connectResp = await fetch(`${gatewayUrl}/vpn/connect`, {
       method: 'POST',
