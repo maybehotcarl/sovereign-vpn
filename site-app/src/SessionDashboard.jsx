@@ -73,6 +73,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const isSubscription = session.tier === 'subscription' || Boolean(subscriptionExpiresAt);
   const renewReferenceExpiry = subscriptionExpiresAt || session.expiresAt;
   const showRenew = isSubscription && !(subscriptionExpiresAt ? subscriptionExpired : expired) && daysRemaining(renewReferenceExpiry) < 7;
+  const wireGuardInstallUrl = 'https://www.wireguard.com/install/';
 
   // Fetch payout info for the connected node operator
   useEffect(() => {
@@ -332,7 +333,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
             onClick={() => setShowConfig(!showConfig)}
             style={{ padding: '10px 20px', fontSize: '0.85rem' }}
           >
-            {showConfig ? 'Hide Raw Config' : 'View Raw Config'}
+            {showConfig ? 'Hide Raw Config' : 'Advanced: View Raw Config'}
           </button>
           <button
             className="btn-disconnect"
@@ -341,6 +342,41 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           >
             {disconnecting ? 'Disconnecting...' : 'Disconnect'}
           </button>
+        </div>
+
+        <div className="setup-panel">
+          <h3>Use With WireGuard</h3>
+          <p className="setup-copy">
+            1. Download your config. 2. Open the WireGuard app. 3. Import the downloaded file and switch the tunnel on.
+          </p>
+          <div className="btn-row" style={{ justifyContent: 'flex-start' }}>
+            <button className="btn-primary" onClick={downloadConfig} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
+              Download Config
+            </button>
+            <a
+              className="btn-secondary"
+              href={wireGuardInstallUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ padding: '10px 20px', fontSize: '0.85rem', textDecoration: 'none' }}
+            >
+              Get WireGuard
+            </a>
+          </div>
+          <div className="setup-grid">
+            <div className="setup-card">
+              <div className="setup-label">Windows / macOS</div>
+              <div className="setup-text">Install WireGuard, then choose “Import tunnel(s) from file” and select `6529vpn.conf`.</div>
+            </div>
+            <div className="setup-card">
+              <div className="setup-label">iPhone / Android</div>
+              <div className="setup-text">Install the WireGuard app, then import the downloaded config file into the app and activate it.</div>
+            </div>
+            <div className="setup-card">
+              <div className="setup-label">Linux</div>
+              <div className="setup-text">Install `wireguard-tools` and `openresolv`, then save the file as `/etc/wireguard/6529vpn.conf` and run `sudo wg-quick up 6529vpn`.</div>
+            </div>
+          </div>
         </div>
 
         {/* Renewal panel */}
