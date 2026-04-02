@@ -321,11 +321,18 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
             </button>
           )}
           <button
+            className="btn-primary"
+            onClick={downloadConfig}
+            style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+          >
+            Download Config
+          </button>
+          <button
             className="btn-secondary"
             onClick={() => setShowConfig(!showConfig)}
             style={{ padding: '10px 20px', fontSize: '0.85rem' }}
           >
-            {showConfig ? 'Hide Config' : 'View Config'}
+            {showConfig ? 'Hide Raw Config' : 'View Raw Config'}
           </button>
           <button
             className="btn-disconnect"
