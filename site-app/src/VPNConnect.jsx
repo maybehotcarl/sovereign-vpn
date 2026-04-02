@@ -91,6 +91,33 @@ function responseErrorMessage(payload, fallback) {
   return fallback;
 }
 
+function resolveVerifySessionToken(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+  if (typeof payload.session_token === 'string' && payload.session_token.trim()) {
+    return payload.session_token.trim();
+  }
+  if (typeof payload.sessionToken === 'string' && payload.sessionToken.trim()) {
+    return payload.sessionToken.trim();
+  }
+  if (typeof payload.address === 'string' && payload.address.trim()) {
+    return payload.address.trim();
+  }
+  return '';
+}
+
+function normalizeVerifyResponse(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+  const sessionToken = resolveVerifySessionToken(payload);
+  return {
+    ...payload,
+    session_token: sessionToken,
+  };
+}
+
 function endpointCandidates(baseUrl, path, { preferSameOrigin = false } = {}) {
   const candidates = [];
   if (preferSameOrigin) {
@@ -362,10 +389,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   const provisionVPN = useCallback(async (vData, stepIdx, sessionMeta = {}) => {
     setCurrentStep(stepIdx);
     const keys = generateKeyPair();
+    const sessionToken = resolveVerifySessionToken(vData);
     if (!keys?.publicKey) {
       throw new Error('Browser failed to generate a WireGuard public key.');
     }
-    if (!vData?.session_token) {
+    if (!sessionToken) {
       console.error('Gateway verify response missing session_token', vData);
       throw new Error('Gateway auth response is missing a session token.');
     }
@@ -374,7 +402,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_token: vData.session_token,
+        session_token: sessionToken,
         public_key: keys.publicKey,
       }),
     });
@@ -390,7 +418,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
     await finalizeVPNProvision(vpnData, keys, {
       address: vData.address,
-      sessionToken: vData.session_token,
+      sessionToken,
       ...sessionMeta,
     });
   }, [finalizeVPNProvision, gatewayUrl]);
@@ -615,10 +643,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: challenge.message, signature }),
       });
-      const vData = await readResponsePayload(verifyResp);
-      if (!vData || typeof vData !== 'object') {
+      const rawVerifyData = await readResponsePayload(verifyResp);
+      if (!rawVerifyData || typeof rawVerifyData !== 'object') {
         throw new Error('Gateway returned an invalid verification response');
       }
+      const vData = normalizeVerifyResponse(rawVerifyData);
 
       if (vData.tier === 'denied') {
         if (vData.error && vData.error.includes('banned')) {
@@ -762,7 +791,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setPhase('running');
       markDone(4, 'Transaction confirmed');
 
-      const needsFreshSignIn = !verifyData?.session_token;
+      const needsFreshSignIn = !resolveVerifySessionToken(verifyData);
       if (needsFreshSignIn) {
         markDone(4, 'Transaction confirmed; refreshing sign-in');
         await startVPN();
