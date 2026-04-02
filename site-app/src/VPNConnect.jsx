@@ -579,26 +579,8 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     signMessageAsync,
   ]);
 
-  const startVPN = useCallback(async () => {
-    setPhase('running');
-    setSteps(usingAnonymousMode ? ANON_STEPS : FREE_STEPS);
-    setCurrentStep(0);
-    setCompletedSteps({});
-    setErrorMsg('');
-
-    setVerifyData(null);
-    setPaymentTxHash(null);
-    setPaymentIntent(null);
-    setSelectedTier(null);
-    setTierOptions(null);
-
-    try {
-      if (usingAnonymousMode) {
-        await startAnonymousVPN();
-        return;
-      }
-
-      // Step 0: Get challenge
+  const startDirectWalletVPN = useCallback(async function runDirectWalletVPN(allowRetry = true) {
+    // Step 0: Get challenge
       const challengeResp = await fetch(`${gatewayUrl}/auth/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -649,6 +631,17 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
           return;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
+          if (
+            allowRetry &&
+            (
+              message.includes('session_token and public_key are required') ||
+              message.includes('session expired or not found')
+            )
+          ) {
+            markDone(2, 'Verified: paid tier; refreshing sign-in');
+            await runDirectWalletVPN(false);
+            return;
+          }
           if (!message.includes('on-chain payment required for paid tier')) {
             throw err;
           }
@@ -675,13 +668,34 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
       // Free tier: continue directly to VPN provisioning
       await provisionVPN(vData, 3);
+  }, [address, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync]);
 
+  const startVPN = useCallback(async () => {
+    setPhase('running');
+    setSteps(usingAnonymousMode ? ANON_STEPS : FREE_STEPS);
+    setCurrentStep(0);
+    setCompletedSteps({});
+    setErrorMsg('');
+
+    setVerifyData(null);
+    setPaymentTxHash(null);
+    setPaymentIntent(null);
+    setSelectedTier(null);
+    setTierOptions(null);
+
+    try {
+      if (usingAnonymousMode) {
+        await startAnonymousVPN();
+        return;
+      }
+
+      await startDirectWalletVPN();
     } catch (err) {
       console.error(err);
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [address, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync, startAnonymousVPN, usingAnonymousMode]);
+  }, [startAnonymousVPN, startDirectWalletVPN, usingAnonymousMode]);
 
   const handlePayAndConnect = useCallback(async () => {
     if (!selectedTier || !tierOptions) return;
