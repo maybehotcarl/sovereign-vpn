@@ -740,14 +740,35 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     try {
       setPhase('running');
       markDone(4, 'Transaction confirmed');
+
+      const needsFreshSignIn = !verifyData?.session_token;
+      if (needsFreshSignIn) {
+        markDone(4, 'Transaction confirmed; refreshing sign-in');
+        await startVPN();
+        return;
+      }
+
       // Step 5: Provision VPN
-      await provisionVPN(verifyData, 5);
+      try {
+        await provisionVPN(verifyData, 5);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (
+          message.includes('session_token and public_key are required') ||
+          message.includes('session expired or not found')
+        ) {
+          markDone(4, 'Transaction confirmed; refreshing sign-in');
+          await startVPN();
+          return;
+        }
+        throw err;
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg(err.message || 'Something went wrong');
       setPhase('error');
     }
-  }, [provisionVPN, verifyData]);
+  }, [provisionVPN, startVPN, verifyData]);
 
   const continueAnonymousAfterSubscription = useCallback(async () => {
     try {
