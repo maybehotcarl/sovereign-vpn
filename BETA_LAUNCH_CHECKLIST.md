@@ -5,6 +5,11 @@ Snapshot date: March 24, 2026
 This is the concrete execution checklist for launching the first public paid
 beta of Sovereign VPN's anonymous access path.
 
+Important current decision: the live public beta is currently `direct wallet`
+only. Use [PUBLIC_BETA_MODE.md](/home/maybe/repos/sovereign-vpn/PUBLIC_BETA_MODE.md)
+as the source of truth for what is publicly enabled today. This checklist
+remains the gating plan for turning on the anonymous public path.
+
 Use this document with:
 
 - `deploy/rehearsal/README.md` for the two-gateway rehearsal stack

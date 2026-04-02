@@ -11,7 +11,8 @@ paid-access path built around `vpn_access_v1`. For the most accurate repo
 orientation, see [CURRENT_STATE.md](CURRENT_STATE.md). For the current verified
 mainnet contract surface, see [MAINNET_ADDRESSES.md](MAINNET_ADDRESSES.md). For
 the concrete beta push-to-launch checklist, see
-[BETA_LAUNCH_CHECKLIST.md](BETA_LAUNCH_CHECKLIST.md).
+[BETA_LAUNCH_CHECKLIST.md](BETA_LAUNCH_CHECKLIST.md). For the current public
+launch posture, see [PUBLIC_BETA_MODE.md](PUBLIC_BETA_MODE.md).
 
 ## What Is This?
 

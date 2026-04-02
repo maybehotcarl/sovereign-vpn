@@ -1,7 +1,8 @@
 # Release Gates
 
 For the execution-order checklist tied to the current anonymous paid beta path,
-see `BETA_LAUNCH_CHECKLIST.md`.
+see `BETA_LAUNCH_CHECKLIST.md`. For the current public launch posture, see
+`PUBLIC_BETA_MODE.md`.
 
 ## Production Scale Gates
 

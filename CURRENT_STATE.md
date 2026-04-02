@@ -8,7 +8,17 @@ the anonymous paid-access path built around `vpn_access_v1`.
 
 For the current verified mainnet contract surface, see `MAINNET_ADDRESSES.md`.
 For the concrete beta launch execution plan, see
-`BETA_LAUNCH_CHECKLIST.md`.
+`BETA_LAUNCH_CHECKLIST.md`. For the current public launch mode decision, see
+`PUBLIC_BETA_MODE.md`.
+
+## Current Public Launch Posture
+
+As of April 2, 2026:
+
+- the public site `6529vpn.io` is operating in direct-wallet mode
+- the direct wallet purchase + connect + WireGuard flow is verified live
+- anonymous access remains staging/internal until a public `zk-api` and public
+  gateway `--zk-api-url` are wired and re-verified end to end
 
 ## What Is Actually Working
 
