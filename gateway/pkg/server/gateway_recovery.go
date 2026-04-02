@@ -45,7 +45,7 @@ func (s *Server) clearSessionPeerState(sessionID string, gatewayInstanceID strin
 
 	states, err := s.peerStates.ListBySession(sessionID)
 	if err != nil {
-		return fmt.Errorf("listing peer state for session %s: %w", sessionID, err)
+		return fmt.Errorf("listing peer state for dead-session recovery: %w", err)
 	}
 
 	var firstErr error
@@ -57,10 +57,10 @@ func (s *Server) clearSessionPeerState(sessionID string, gatewayInstanceID strin
 			continue
 		}
 		if err := s.deletePeerOwner(state.PublicKey); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("releasing peer reservation for %s: %w", state.PublicKey, err)
+			firstErr = fmt.Errorf("releasing peer reservation during dead-session recovery: %w", err)
 		}
 		if err := s.deletePeerState(state.PublicKey); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("deleting peer state for %s: %w", state.PublicKey, err)
+			firstErr = fmt.Errorf("deleting peer state during dead-session recovery: %w", err)
 		}
 	}
 
@@ -78,41 +78,31 @@ func (s *Server) clearDeadSessionOwnership(session *nftgate.Session) (*nftgate.S
 	}
 	if s != nil && s.peerOwners != nil {
 		if err := s.peerOwners.ReleaseByOwner(session.ID, oldOwner); err != nil {
-			return nil, fmt.Errorf(
-				"releasing stale peer reservations for session %s on gateway %s: %w",
-				session.ID,
-				oldOwner,
-				err,
-			)
+			return nil, fmt.Errorf("releasing stale peer reservations for dead gateway: %w", err)
 		}
 	}
 	if err := s.gate.ReleaseSessionGateway(session.ID, oldOwner); err != nil {
-		return nil, fmt.Errorf("releasing dead gateway owner %s for session %s: %w", oldOwner, session.ID, err)
+		return nil, fmt.Errorf("releasing dead gateway owner: %w", err)
 	}
 
 	refreshed, err := s.gate.GetSessionByTokenWithError(session.Token)
 	if err != nil {
-		return nil, fmt.Errorf("reloading session %s after dead-owner cleanup: %w", session.ID, err)
+		return nil, fmt.Errorf("reloading session after dead-owner cleanup: %w", err)
 	}
 	if refreshed == nil {
 		return nil, nil
 	}
 
 	if refreshed.GatewayInstanceID == "" {
-		log.Printf("Recovered dead gateway binding: session=%s old_owner=%s", session.ID, oldOwner)
+		log.Printf("Recovered dead gateway binding")
 		return refreshed, nil
 	}
 	if refreshed.GatewayInstanceID != oldOwner {
-		log.Printf(
-			"Observed concurrent dead gateway recovery: session=%s old_owner=%s new_owner=%s",
-			session.ID,
-			oldOwner,
-			refreshed.GatewayInstanceID,
-		)
+		log.Printf("Observed concurrent dead gateway recovery")
 		return refreshed, nil
 	}
 
-	log.Printf("Recovered dead gateway binding: session=%s owner=%s released=false", session.ID, oldOwner)
+	log.Printf("Recovered dead gateway binding without releasing owner")
 	return refreshed, nil
 }
 
@@ -133,14 +123,10 @@ func (s *Server) takeoverDeadSession(session *nftgate.Session) (*nftgate.Session
 
 	rebound, newlyBound, err := s.gate.BindSessionGateway(reconciled.ID, s.currentGatewayIdentity())
 	if err != nil {
-		return nil, false, fmt.Errorf("binding recovered session %s to gateway %s: %w", reconciled.ID, s.currentGatewayInstanceID(), err)
+		return nil, false, fmt.Errorf("binding recovered session to current gateway: %w", err)
 	}
 	if rebound != nil && s.sessionOwnedByCurrentGateway(rebound) {
-		log.Printf(
-			"Took over dead gateway session: session=%s new_owner=%s",
-			rebound.ID,
-			s.currentGatewayInstanceID(),
-		)
+		log.Printf("Took over dead gateway session")
 	}
 	return rebound, newlyBound, nil
 }

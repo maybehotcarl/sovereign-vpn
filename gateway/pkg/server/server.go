@@ -674,7 +674,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 	if session.GatewayInstanceID != "" && !s.sessionOwnedByCurrentGateway(session) {
 		ownerState, err := s.gatewayOwnerState(session)
 		if err != nil {
-			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			log.Printf("Error checking gateway owner state: %v", err)
 			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
 			return
 		}
@@ -682,7 +682,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 		case gatewayOwnerStateDead:
 			session, gatewayBoundNow, err = s.takeoverDeadSession(session)
 			if err != nil {
-				log.Printf("Error taking over dead gateway session %s: %v", session.ID, err)
+				log.Printf("Error taking over dead gateway session: %v", err)
 				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
 				return
 			}
@@ -721,7 +721,7 @@ func (s *Server) handleVPNConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.gate.ReleaseSessionGateway(session.ID, s.currentGatewayInstanceID()); err != nil {
-			log.Printf("Warning: failed to release gateway affinity for session %s: %v", session.ID, err)
+			log.Printf("Warning: failed to release gateway affinity: %v", err)
 		}
 	}
 
@@ -1055,14 +1055,14 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionOwnedByCurrentGateway(session) {
 		ownerState, err := s.gatewayOwnerState(session)
 		if err != nil {
-			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			log.Printf("Error checking gateway owner state: %v", err)
 			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
 			return
 		}
 		if ownerState == gatewayOwnerStateDead {
 			reconciled, err := s.clearDeadSessionOwnership(session)
 			if err != nil {
-				log.Printf("Error recovering dead gateway session %s during disconnect: %v", session.ID, err)
+				log.Printf("Error recovering dead gateway session during disconnect: %v", err)
 				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
 				return
 			}
@@ -1095,7 +1095,7 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.recoverPeerIfNeeded(req.PublicKey); err != nil {
-		log.Printf("Error recovering peer state for %s: %v", req.PublicKey, err)
+		log.Printf("Error recovering peer state: %v", err)
 		writeError(w, http.StatusServiceUnavailable, "peer recovery state unavailable")
 		return
 	}
@@ -1105,13 +1105,13 @@ func (s *Server) handleVPNDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.deletePeerOwner(req.PublicKey); err != nil {
-		log.Printf("Warning: failed to release peer owner for %s: %v", req.PublicKey, err)
+		log.Printf("Warning: failed to release peer owner: %v", err)
 	}
 	if err := s.gate.ReleaseSessionGateway(session.ID, s.currentGatewayInstanceID()); err != nil {
-		log.Printf("Warning: failed to release gateway affinity for session %s: %v", session.ID, err)
+		log.Printf("Warning: failed to release gateway affinity: %v", err)
 	}
 	if err := s.deletePeerState(req.PublicKey); err != nil {
-		log.Printf("Warning: failed to delete peer recovery state for %s: %v", req.PublicKey, err)
+		log.Printf("Warning: failed to delete peer recovery state: %v", err)
 	}
 
 	// Close on-chain session (fire-and-forget) — skip for subscribers
@@ -1183,7 +1183,7 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.sessionOwnedByCurrentGateway(session) {
 		ownerState, err := s.gatewayOwnerState(session)
 		if err != nil {
-			log.Printf("Error checking gateway owner state for session %s: %v", session.ID, err)
+			log.Printf("Error checking gateway owner state: %v", err)
 			writeError(w, http.StatusServiceUnavailable, "gateway presence backend unavailable")
 			return
 		}
@@ -1192,7 +1192,7 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 			previousGatewayURL := session.GatewayPublicURL
 			reconciled, err := s.clearDeadSessionOwnership(session)
 			if err != nil {
-				log.Printf("Error recovering dead gateway session %s during status: %v", session.ID, err)
+				log.Printf("Error recovering dead gateway session during status: %v", err)
 				writeError(w, http.StatusServiceUnavailable, "failed to recover dead gateway session")
 				return
 			}

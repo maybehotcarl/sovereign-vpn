@@ -33,6 +33,24 @@ The app code redacts sensitive runtime logs, but log retention is ultimately an 
 - Docker's built-in log rotation is size-based, not time-based. It reduces disk persistence, but it does not satisfy a strict `1 hour` retention requirement on its own.
 - To meet the `1 hour` policy, run logs through infrastructure that enforces TTL-based deletion, or disable persistent raw container logs entirely.
 
+## Launch Verification
+
+Before calling the public beta launch-ready:
+
+- run [deploy/check-live-privacy.sh](deploy/check-live-privacy.sh) against the public droplet
+- confirm recent `sovereign-gateway` logs do not contain:
+  - full wallet addresses
+  - client tunnel IPs
+  - full WireGuard public keys
+  - session tokens
+  - `Authorization` headers
+- confirm reverse-proxy access logs are still disabled
+- confirm journald or the upstream log sink has an explicit retention policy compatible with the `1 hour` requirement
+
+## Current Gap
+
+As of April 2, 2026, the live public gateway binary is behind the current source-level log redaction work. Treat log hygiene as incomplete until the public gateway is rebuilt/redeployed and the live privacy audit passes.
+
 ## Known Privacy Limits
 
 - Node operators can still observe user traffic as part of normal VPN operation.

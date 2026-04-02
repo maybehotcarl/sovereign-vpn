@@ -339,6 +339,6 @@ func (s *Server) recoverPeerIfNeeded(publicKey string) error {
 	}); err != nil {
 		return err
 	}
-	log.Printf("[wireguard] Peer state recovered on demand: %s", publicKey)
+	log.Printf("[wireguard] Peer state recovered on demand")
 	return nil
 }

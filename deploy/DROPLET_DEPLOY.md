@@ -77,6 +77,9 @@ For a quick public verification after deploy:
 ./deploy/check-public-stack.sh
 ```
 
+For ongoing operations on the public stack, see
+[PUBLIC_OPERATIONS.md](/home/maybe/repos/sovereign-vpn/deploy/PUBLIC_OPERATIONS.md).
+
 ## Frontend + Gateway Update On The Droplet
 
 On the droplet:
