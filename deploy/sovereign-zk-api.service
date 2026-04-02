@@ -1,0 +1,15 @@
+[Unit]
+Description=6529 ZK API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/sovereign-vpn/site-app/6529-zk-api
+Environment=NODE_ENV=production
+EnvironmentFile=/root/sovereign-vpn/site-app/6529-zk-api/.env.production.local
+ExecStart=/bin/bash -lc 'exec ./node_modules/.bin/next start -H 127.0.0.1 -p 3002'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

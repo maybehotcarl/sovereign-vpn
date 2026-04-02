@@ -6,6 +6,7 @@ This runbook is for the current public `6529vpn.io` stack:
 
 - static frontend at `/var/www/6529vpn`
 - gateway service `sovereign-gateway.service`
+- public ZK API service `sovereign-zk-api.service`
 - WireGuard interface `wg0`
 
 ## Basic Health
@@ -21,7 +22,9 @@ From the droplet:
 
 ```bash
 curl -sS http://127.0.0.1:8080/health
+curl -sS http://127.0.0.1:3002/api/health
 systemctl is-active sovereign-gateway
+systemctl is-active sovereign-zk-api
 sudo wg show wg0
 ```
 
@@ -50,11 +53,25 @@ ssh root@142.93.159.175 \
   "systemctl restart sovereign-gateway && systemctl status sovereign-gateway --no-pager"
 ```
 
+## zk-api Restart
+
+```bash
+ssh root@142.93.159.175 \
+  "systemctl restart sovereign-zk-api && systemctl status sovereign-zk-api --no-pager"
+```
+
 ## Frontend Publish
 
 ```bash
 cd /home/maybe/repos/sovereign-vpn
 ./deploy/publish-public-frontend.sh
+```
+
+## Public Anonymous Deploy
+
+```bash
+cd /home/maybe/repos/sovereign-vpn
+./deploy/deploy-public-anon.sh
 ```
 
 ## Verify A Live User Tunnel
@@ -101,6 +118,7 @@ Actual external alert routing is still not wired. Until that exists, the manual 
 - `./deploy/check-public-stack.sh`
 - `./deploy/check-live-privacy.sh`
 - `ssh root@142.93.159.175 "systemctl is-active sovereign-gateway"`
+- `ssh root@142.93.159.175 "systemctl is-active sovereign-zk-api"`
 - `ssh root@142.93.159.175 "sudo wg show wg0"`
 
 ## Open Gap

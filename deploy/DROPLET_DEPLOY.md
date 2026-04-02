@@ -22,7 +22,7 @@ The current droplet layout is:
 
 `site-app` now consumes `@6529/zk-service` as a normal package dependency. You do not need a sibling `site-app/6529-zk-service` checkout on the droplet just to build the frontend.
 
-For the anonymous path, the frontend also needs a public `zk-api` URL and the public gateway must be started with `--zk-api-url`. The site deploy alone does not update that service.
+For the anonymous path, the frontend also needs a public `zk-api` URL and the public gateway must be started with `--zk-api-url`. The checked-in helper [deploy-public-anon.sh](/home/maybe/repos/sovereign-vpn/deploy/deploy-public-anon.sh) now handles that same-origin deployment path.
 
 ## Preflight
 
@@ -47,7 +47,11 @@ VITE_ENABLE_ANON_VPN=false
 VITE_ENABLE_ANON_VPN_DEV_REGISTRATION=false
 ```
 
-Enable anonymous mode only after the public `zk-api` exists and the live gateway is configured to talk to it.
+Enable anonymous mode only after the public `zk-api` exists and the live gateway is configured to talk to it. The current public deployment uses:
+
+- browser-facing `zk-api`: `https://6529vpn.io/api/*`
+- upstream `zk-api`: `127.0.0.1:3002`
+- gateway `--zk-api-url`: `http://127.0.0.1:3002`
 
 Do not copy local dev values like `127.0.0.1:3002` or `127.0.0.1:8081` into the public build.
 
@@ -69,6 +73,13 @@ export VITE_ENABLE_ANON_VPN=true
 export VITE_ZK_API_URL=https://<public-zk-api-domain>
 export VITE_ZK_ARTIFACT_BASE_URL=https://<public-zk-api-domain>/api/artifacts
 ./deploy/publish-public-frontend.sh
+```
+
+To update the full public anonymous stack in one pass:
+
+```bash
+cd /home/maybe/repos/sovereign-vpn
+./deploy/deploy-public-anon.sh
 ```
 
 For a quick public verification after deploy:

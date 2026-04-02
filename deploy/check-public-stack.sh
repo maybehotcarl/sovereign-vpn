@@ -12,6 +12,16 @@ curl -fsS "$PUBLIC_SITE_URL/health"
 
 echo
 echo
+echo "API health:"
+curl -fsS "$PUBLIC_SITE_URL/api/health"
+
+echo
+echo
+echo "API meta:"
+curl -fsS "$PUBLIC_SITE_URL/api/meta"
+
+echo
+echo
 echo "Session info:"
 curl -fsS "$PUBLIC_SITE_URL/session/info"
 
