@@ -7,7 +7,7 @@ This runbook updates the public `6529vpn.io` droplet that serves:
 
 It assumes the current top-level [Caddyfile](/home/maybe/repos/sovereign-vpn/Caddyfile) pattern:
 
-- `site-app/dist` is the static web root
+- `/var/www/6529vpn` is the static web root
 - `/auth`, `/vpn`, `/session`, `/subscription`, `/nodes`, `/health`, and `/payout` proxy to the gateway
 
 ## Scope
@@ -51,7 +51,33 @@ Enable anonymous mode only after the public `zk-api` exists and the live gateway
 
 Do not copy local dev values like `127.0.0.1:3002` or `127.0.0.1:8081` into the public build.
 
-## Frontend + Gateway Update
+## Fast Path: Publish The Frontend From Your Workstation
+
+The checked-in script [publish-public-frontend.sh](/home/maybe/repos/sovereign-vpn/deploy/publish-public-frontend.sh) builds `site-app` with production env, syncs `dist/` to the droplet, and prints the live asset hash.
+
+For the current direct-wallet public beta:
+
+```bash
+cd /home/maybe/repos/sovereign-vpn
+./deploy/publish-public-frontend.sh
+```
+
+If you need anonymous mode in the public build, export the public ZK API URL first:
+
+```bash
+export VITE_ENABLE_ANON_VPN=true
+export VITE_ZK_API_URL=https://<public-zk-api-domain>
+export VITE_ZK_ARTIFACT_BASE_URL=https://<public-zk-api-domain>/api/artifacts
+./deploy/publish-public-frontend.sh
+```
+
+For a quick public verification after deploy:
+
+```bash
+./deploy/check-public-stack.sh
+```
+
+## Frontend + Gateway Update On The Droplet
 
 On the droplet:
 

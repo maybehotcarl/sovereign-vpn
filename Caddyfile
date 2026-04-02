@@ -26,7 +26,7 @@
 
 	# Everything else — static frontend with SPA fallback
 	handle {
-		root * /home/maybe/sovereign-vpn/site-app/dist
+		root * /var/www/6529vpn
 		try_files {path} /index.html
 		file_server
 	}
