@@ -45,6 +45,103 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+function downloadTextFile(filename, contents, mimeType = 'text/plain;charset=utf-8') {
+  const blob = new Blob([contents], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildPosixAutoDisconnectScript(vpnConfig, expiresAt, platform) {
+  const disconnectDelaySeconds = Math.max(15, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  const humanExpiry = formatDateTime(expiresAt) || expiresAt;
+  const installHint =
+    platform === 'macos'
+      ? 'Install wireguard-tools first, for example with `brew install wireguard-tools`.'
+      : 'Install wireguard-tools first, for example with `sudo apt install wireguard-tools openresolv`.';
+
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+WG_QUICK="$(command -v wg-quick || true)"
+if [ -z "$WG_QUICK" ]; then
+  echo "${installHint}" >&2
+  exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Run this helper with sudo so it can bring the tunnel up and tear it down later." >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_PATH="$SCRIPT_DIR/6529vpn.conf"
+DISCONNECT_DELAY=${disconnectDelaySeconds}
+
+cat > "$CONFIG_PATH" <<'CONFIG_EOF'
+${vpnConfig}
+CONFIG_EOF
+chmod 600 "$CONFIG_PATH"
+
+"$WG_QUICK" down "$CONFIG_PATH" >/dev/null 2>&1 || true
+"$WG_QUICK" up "$CONFIG_PATH"
+
+cleanup_cmd=$(printf '%q down %q >/tmp/6529vpn-expiry-guard.log 2>&1; rm -f %q' "$WG_QUICK" "$CONFIG_PATH" "$CONFIG_PATH")
+nohup bash -lc "sleep $DISCONNECT_DELAY; $cleanup_cmd" >/dev/null 2>&1 &
+
+echo "6529 VPN is connected."
+echo "This helper will automatically disconnect the tunnel at ${humanExpiry}."
+echo "To disconnect sooner, run: sudo $WG_QUICK down $CONFIG_PATH"
+`;
+}
+
+function buildWindowsAutoDisconnectScript(vpnConfig, expiresAt) {
+  const disconnectDelaySeconds = Math.max(15, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000));
+  const humanExpiry = formatDateTime(expiresAt) || expiresAt;
+
+  return `$ErrorActionPreference = "Stop"
+
+$wireguard = Join-Path $env:ProgramFiles "WireGuard\\wireguard.exe"
+if (-not (Test-Path $wireguard)) {
+  throw "Install WireGuard for Windows first: https://www.wireguard.com/install/"
+}
+
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).
+  IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+  throw "Run this helper from an elevated PowerShell window."
+}
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$configPath = Join-Path $scriptDir "6529vpn.conf"
+$cleanupPath = Join-Path $env:TEMP "6529vpn-expiry-guard.ps1"
+
+@'
+${vpnConfig}
+'@ | Set-Content -LiteralPath $configPath -Encoding Ascii
+
+try { & $wireguard /uninstalltunnelservice 6529vpn | Out-Null } catch {}
+& $wireguard /installtunnelservice $configPath
+
+$cleanup = @"
+Start-Sleep -Seconds ${disconnectDelaySeconds}
+& '$wireguard' /uninstalltunnelservice 6529vpn | Out-Null
+Remove-Item -LiteralPath '$configPath' -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '$cleanupPath' -ErrorAction SilentlyContinue
+"@
+
+Set-Content -LiteralPath $cleanupPath -Value $cleanup -Encoding Ascii
+Start-Process powershell -WindowStyle Hidden -ArgumentList @('-ExecutionPolicy', 'Bypass', '-File', $cleanupPath)
+
+Write-Host "6529 VPN is connected."
+Write-Host "This helper will automatically disconnect the tunnel at ${humanExpiry}."
+Write-Host "To disconnect sooner, run: & '$wireguard' /uninstalltunnelservice 6529vpn"
+`;
+}
+
 export default function SessionDashboard({ session, onDisconnect, onReconnect, onRenew }) {
   const [timeLeft, setTimeLeft] = useState(() => formatTimeLeft(session.expiresAt));
   const [disconnecting, setDisconnecting] = useState(false);
@@ -74,6 +171,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const renewReferenceExpiry = subscriptionExpiresAt || session.expiresAt;
   const showRenew = isSubscription && !(subscriptionExpiresAt ? subscriptionExpired : expired) && daysRemaining(renewReferenceExpiry) < 7;
   const wireGuardInstallUrl = 'https://www.wireguard.com/install/';
+  const sessionExpiryLabel = formatDateTime(session.expiresAt);
 
   // Fetch payout info for the connected node operator
   useEffect(() => {
@@ -179,13 +277,66 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   }, [renewSelected, writeContractAsync]);
 
   const downloadConfig = () => {
-    const blob = new Blob([session.vpnConfig], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = '6529vpn.conf';
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadTextFile('6529vpn.conf', session.vpnConfig);
+  };
+
+  const openDesktopApp = async () => {
+    const desktopPayload = {
+      vpnConfig: session.vpnConfig,
+      expiresAt: session.expiresAt,
+      accessMode: isAnonymousAccess ? 'anonymous' : 'direct',
+      serverEndpoint: session.serverEndpoint,
+      sessionLabel: isAnonymousAccess ? 'Anonymous Session' : 'Direct Wallet Session',
+    };
+
+    const sendHandoff = async () => {
+      const response = await fetch('http://127.0.0.1:9469/handoff', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(desktopPayload),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        const errorText = payload?.error ? ` (${payload.error})` : '';
+        throw new Error(`Desktop handoff failed${errorText}`);
+      }
+    };
+
+    try {
+      await sendHandoff();
+      return;
+    } catch {
+      window.location.href = 'sovereignvpn://open';
+      window.setTimeout(() => {
+        sendHandoff().catch(() => {
+          window.alert('Desktop app not detected yet. Open the 6529 VPN Desktop app first, then try “Open in Desktop App” again.');
+        });
+      }, 1200);
+    }
+  };
+
+  const downloadLinuxHelper = () => {
+    downloadTextFile(
+      '6529vpn-linux-connect.sh',
+      buildPosixAutoDisconnectScript(session.vpnConfig, session.expiresAt, 'linux'),
+    );
+  };
+
+  const downloadMacHelper = () => {
+    downloadTextFile(
+      '6529vpn-macos-connect.command',
+      buildPosixAutoDisconnectScript(session.vpnConfig, session.expiresAt, 'macos'),
+    );
+  };
+
+  const downloadWindowsHelper = () => {
+    downloadTextFile(
+      '6529vpn-windows-connect.ps1',
+      buildWindowsAutoDisconnectScript(session.vpnConfig, session.expiresAt),
+    );
   };
 
   const copyConfig = async () => {
@@ -263,6 +414,25 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           </div>
         )}
 
+        <div
+          style={{
+            marginBottom: 16,
+            padding: '12px',
+            border: '1px solid rgba(255, 184, 77, 0.45)',
+            borderRadius: 8,
+            background: 'rgba(255, 184, 77, 0.08)',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Avoid getting stranded when this tunnel expires
+          </div>
+          <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
+            This config is a full-tunnel WireGuard profile. If it stays active after the lease ends, your device can keep routing traffic into a dead tunnel until you disconnect it manually.
+            {sessionExpiryLabel ? ` This session is scheduled to expire at ${sessionExpiryLabel}.` : ''}
+            {' '}Use one of the helper downloads below if you want the tunnel to tear itself down automatically at expiry.
+          </div>
+        </div>
+
         <div className="dashboard-stats">
           <div className="stat">
             <div className="stat-label">
@@ -311,6 +481,13 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         </div>
 
         <div className="dashboard-actions">
+          <button
+            className="btn-primary"
+            onClick={openDesktopApp}
+            style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+          >
+            Open in Desktop App
+          </button>
           {showRenew && (
             <button
               className="btn-primary"
@@ -347,11 +524,14 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         <div className="setup-panel">
           <h3>Use With WireGuard</h3>
           <p className="setup-copy">
-            1. Download your config. 2. Open the WireGuard app. 3. Import the downloaded file and switch the tunnel on.
+            Best path: hand this session off to the desktop app so it can own the tunnel lifecycle. If you stay on the raw WireGuard path, use one of the helper downloads so the tunnel disconnects itself at expiry.
           </p>
           <div className="btn-row" style={{ justifyContent: 'flex-start' }}>
+            <button className="btn-primary" onClick={openDesktopApp} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
+              Open in Desktop App
+            </button>
             <button className="btn-primary" onClick={downloadConfig} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
-              Download Config
+              Download Raw Config
             </button>
             <a
               className="btn-secondary"
@@ -365,16 +545,35 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           </div>
           <div className="setup-grid">
             <div className="setup-card">
-              <div className="setup-label">Windows / macOS</div>
-              <div className="setup-text">Install WireGuard, then choose “Import tunnel(s) from file” and select `6529vpn.conf`.</div>
+              <div className="setup-label">Linux Helper</div>
+              <div className="setup-text">Downloads a script that writes the config, starts the tunnel with `wg-quick`, and automatically disconnects it when the session lease ends.</div>
+              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
+                <button className="btn-primary" onClick={downloadLinuxHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
+                  Download Linux Helper
+                </button>
+              </div>
             </div>
             <div className="setup-card">
-              <div className="setup-label">iPhone / Android</div>
-              <div className="setup-text">Install the WireGuard app, then import the downloaded config file into the app and activate it.</div>
+              <div className="setup-label">macOS Helper</div>
+              <div className="setup-text">Downloads a script for `wireguard-tools` users that starts the tunnel and tears it down automatically at lease expiry.</div>
+              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
+                <button className="btn-primary" onClick={downloadMacHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
+                  Download macOS Helper
+                </button>
+              </div>
             </div>
             <div className="setup-card">
-              <div className="setup-label">Linux</div>
-              <div className="setup-text">Install `wireguard-tools` and `openresolv`, then save the file as `/etc/wireguard/6529vpn.conf` and run `sudo wg-quick up 6529vpn`.</div>
+              <div className="setup-label">Windows Helper</div>
+              <div className="setup-text">Downloads a PowerShell helper that installs the tunnel service and schedules an automatic disconnect when this lease expires.</div>
+              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
+                <button className="btn-primary" onClick={downloadWindowsHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
+                  Download Windows Helper
+                </button>
+              </div>
+            </div>
+            <div className="setup-card">
+              <div className="setup-label">Mobile / Manual</div>
+              <div className="setup-text">If you import the raw config into WireGuard yourself, remember to turn the tunnel off when the lease ends or after the app says the session has expired.</div>
             </div>
           </div>
         </div>

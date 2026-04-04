@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>6529 VPN Desktop</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101722;
+        --panel: #172233;
+        --panel-strong: #1d2d45;
+        --border: rgba(255, 255, 255, 0.12);
+        --text: #f3f7fb;
+        --muted: #a6b4c6;
+        --accent: #8be0b0;
+        --accent-strong: #1f8f60;
+        --warn: #ffcb6b;
+        --danger: #ff8c7a;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "SF Pro Display", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top right, rgba(139, 224, 176, 0.2), transparent 25%),
+          linear-gradient(180deg, #0d141e 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+
+      .shell {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 40px 32px 56px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 22px;
+        box-shadow: 0 18px 48px rgba(0,0,0,0.18);
+      }
+
+      h1, h2, h3, p { margin-top: 0; }
+      h1 {
+        font-size: 2.6rem;
+        line-height: 1;
+        margin-bottom: 14px;
+      }
+
+      .lede {
+        color: var(--muted);
+        font-size: 1rem;
+        line-height: 1.65;
+        max-width: 48rem;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 0.92rem;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--warn);
+        box-shadow: 0 0 0 6px rgba(255, 203, 107, 0.14);
+      }
+
+      .dot.connected {
+        background: var(--accent);
+        box-shadow: 0 0 0 6px rgba(139, 224, 176, 0.14);
+      }
+
+      .dot.error {
+        background: var(--danger);
+        box-shadow: 0 0 0 6px rgba(255, 140, 122, 0.14);
+      }
+
+      .actions, .detail-grid, .hint-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .actions {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        margin-top: 18px;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 12px;
+        padding: 14px 16px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, var(--accent) 0%, #6ab3f3 100%);
+        color: #071019;
+      }
+
+      .secondary {
+        background: rgba(255,255,255,0.06);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+
+      .danger {
+        background: rgba(255, 140, 122, 0.12);
+        color: #ffd8d2;
+        border: 1px solid rgba(255, 140, 122, 0.35);
+      }
+
+      .detail-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      .detail {
+        padding: 14px;
+        border-radius: 14px;
+        background: rgba(0,0,0,0.18);
+        border: 1px solid rgba(255,255,255,0.06);
+      }
+
+      .detail-label {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .detail-value {
+        font-size: 0.98rem;
+        word-break: break-word;
+      }
+
+      .muted { color: var(--muted); }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+
+      .hint-grid {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        margin-top: 20px;
+      }
+
+      .hint {
+        padding: 16px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+
+      .hint h3 {
+        font-size: 1rem;
+        margin-bottom: 8px;
+      }
+
+      .hint p {
+        color: var(--muted);
+        line-height: 1.6;
+        margin-bottom: 0;
+      }
+
+      .log {
+        margin-top: 16px;
+        min-height: 52px;
+        border-radius: 14px;
+        padding: 14px 16px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(0,0,0,0.18);
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+        .shell {
+          padding: 24px 16px 40px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="card">
+          <div id="statusBadge" class="status-badge">
+            <span id="statusDot" class="dot"></span>
+            <span id="statusText">Desktop companion ready</span>
+          </div>
+          <h1>6529 VPN Desktop</h1>
+          <p class="lede">
+            This app owns the desktop tunnel lifecycle. The website handles wallet auth and purchase, then hands the live VPN session off here so the tunnel can come up locally and disconnect itself when the lease ends.
+          </p>
+          <div class="actions">
+            <button id="openWebsite" class="primary">Open 6529vpn.io</button>
+            <button id="disconnect" class="danger">Disconnect Tunnel</button>
+          </div>
+          <div id="log" class="log">Waiting for a handoff from the website.</div>
+        </div>
+
+        <div class="card">
+          <h2>Current Session</h2>
+          <div class="detail-grid">
+            <div class="detail">
+              <div class="detail-label">Mode</div>
+              <div id="detailMode" class="detail-value">Idle</div>
+            </div>
+            <div class="detail">
+              <div class="detail-label">Expires</div>
+              <div id="detailExpiry" class="detail-value">Not connected</div>
+            </div>
+            <div class="detail">
+              <div class="detail-label">Server</div>
+              <div id="detailServer" class="detail-value mono">—</div>
+            </div>
+            <div class="detail">
+              <div class="detail-label">Last Disconnect</div>
+              <div id="detailDisconnect" class="detail-value">—</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="hint-grid">
+        <div class="hint">
+          <h3>How it works</h3>
+          <p>Connect on the website, then click “Open in Desktop App”. The browser sends the live WireGuard config here over the <span class="mono">sovereignvpn://</span> handoff link.</p>
+        </div>
+        <div class="hint">
+          <h3>What this app does</h3>
+          <p>It writes the config locally, requests the platform’s elevated permissions, brings the tunnel up, and schedules an automatic disconnect when the lease expires.</p>
+        </div>
+        <div class="hint">
+          <h3>Current platform support</h3>
+          <p id="platformSummary">Loading platform details…</p>
+        </div>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+  </html>

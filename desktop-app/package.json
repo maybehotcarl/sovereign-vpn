@@ -1,0 +1,77 @@
+{
+  "name": "sovereign-vpn-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop companion app for Sovereign VPN",
+  "author": "6529",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "node --check main.js && node --check preload.js && node --check renderer.js",
+    "package:dir": "electron-builder --dir",
+    "package:linux": "electron-builder --linux AppImage tar.gz",
+    "package:mac": "electron-builder --mac dmg zip",
+    "package:win": "electron-builder --win nsis portable",
+    "package:all": "electron-builder -mwl"
+  },
+  "build": {
+    "appId": "io.6529.sovereignvpn.desktop",
+    "productName": "6529 VPN Desktop",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build-resources",
+      "output": "release"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "protocols": [
+      {
+        "name": "Sovereign VPN Desktop",
+        "schemes": [
+          "sovereignvpn"
+        ]
+      }
+    ],
+    "publish": null,
+    "linux": {
+      "category": "Network",
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "entitlements": "build-resources/entitlements.mac.plist",
+      "entitlementsInherit": "build-resources/entitlements.mac.plist"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1"
+  }
+}
