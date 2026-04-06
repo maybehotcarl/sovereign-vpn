@@ -16,6 +16,7 @@ Use this document with:
 - `RELEASE_GATES.md` for longer-horizon product and contract gates
 - `PRIVACY.md` for logging and retention requirements
 - `MAINNET_ADDRESSES.md` for verified mainnet addresses
+- `BETA_TEST_MATRIX.md` for the live beta execution matrix
 
 ## Launch Scope
 

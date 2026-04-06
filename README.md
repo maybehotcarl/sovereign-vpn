@@ -12,7 +12,8 @@ orientation, see [CURRENT_STATE.md](CURRENT_STATE.md). For the current verified
 mainnet contract surface, see [MAINNET_ADDRESSES.md](MAINNET_ADDRESSES.md). For
 the concrete beta push-to-launch checklist, see
 [BETA_LAUNCH_CHECKLIST.md](BETA_LAUNCH_CHECKLIST.md). For the current public
-launch posture, see [PUBLIC_BETA_MODE.md](PUBLIC_BETA_MODE.md).
+launch posture, see [PUBLIC_BETA_MODE.md](PUBLIC_BETA_MODE.md). For the live
+beta execution matrix, see [BETA_TEST_MATRIX.md](BETA_TEST_MATRIX.md).
 
 ## What Is This?
 
