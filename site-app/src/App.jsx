@@ -5,6 +5,31 @@ import NodeSelector from './NodeSelector';
 import SessionDashboard from './SessionDashboard';
 import { useSession } from './useSession';
 
+function HeroHeader({ gatewayUrl }) {
+  return (
+    <div className="hero">
+      <div className="hero-logo-lockup">
+        <picture className="hero-logo-shell">
+          <source srcSet="/vpn-logo.avif" type="image/avif" />
+          <img
+            className="hero-logo"
+            src="/vpn-logo.png"
+            alt="6529 VPN logo artwork"
+          />
+        </picture>
+        <div className="hero-logo-note">Official 6529 VPN mark</div>
+      </div>
+
+      <h1><span>6529</span> VPN</h1>
+      <p>
+        An NFT-gated VPN for the 6529 community. Hold a Memes card, get a VPN.
+        No accounts. No emails. No KYC.
+      </p>
+      <GatewayStatus gatewayUrl={gatewayUrl} />
+    </div>
+  );
+}
+
 export default function App() {
   const [gatewayUrl, setGatewayUrl] = useState('');
   const { session, saveSession, clearSession } = useSession();
@@ -17,14 +42,7 @@ export default function App() {
   if (session) {
     return (
       <div className="container">
-        <div className="hero">
-          <h1><span>6529</span> VPN</h1>
-          <p>
-            An NFT-gated VPN for the 6529 community. Hold a Memes card, get a VPN.
-            No accounts. No emails. No KYC.
-          </p>
-          <GatewayStatus gatewayUrl={session.gatewayUrl} />
-        </div>
+        <HeroHeader gatewayUrl={session.gatewayUrl} />
 
         <SessionDashboard
           session={session}
@@ -49,14 +67,7 @@ export default function App() {
   // No session — show connect flow + info sections
   return (
     <div className="container">
-      <div className="hero">
-        <h1><span>6529</span> VPN</h1>
-        <p>
-          An NFT-gated VPN for the 6529 community. Hold a Memes card, get a VPN.
-          No accounts. No emails. No KYC.
-        </p>
-        <GatewayStatus gatewayUrl={gatewayUrl} />
-      </div>
+      <HeroHeader gatewayUrl={gatewayUrl} />
 
       <NodeSelector onSelect={setGatewayUrl} />
 

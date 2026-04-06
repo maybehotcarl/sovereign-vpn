@@ -27,6 +27,37 @@ code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-si
 
 /* Hero */
 .hero { padding: 80px 0 40px; text-align: center; }
+.hero-logo-lockup {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.hero-logo-shell {
+  display: inline-flex;
+  padding: 8px;
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03)),
+    radial-gradient(circle at top right, rgba(78, 205, 196, 0.24), transparent 46%);
+  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.35);
+}
+.hero-logo {
+  display: block;
+  width: 124px;
+  height: 124px;
+  object-fit: cover;
+  border-radius: 22px;
+}
+.hero-logo-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
 .hero h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 16px; }
 .hero h1 span { color: var(--accent); }
 .hero p { font-size: 1.1rem; color: var(--muted); max-width: 500px; margin: 0 auto; }
@@ -596,6 +627,13 @@ footer a:hover { color: var(--accent); }
 }
 
 @media (max-width: 600px) {
+  .hero {
+    padding-top: 56px;
+  }
+  .hero-logo {
+    width: 96px;
+    height: 96px;
+  }
   .status-panel-header,
   .status-graph-header {
     flex-direction: column;
