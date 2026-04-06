@@ -1,0 +1,12 @@
+[Unit]
+Description=Run 6529 public stack alert checks every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=sovereign-public-alerts.service
+
+[Install]
+WantedBy=timers.target

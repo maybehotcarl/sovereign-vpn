@@ -1,0 +1,13 @@
+[Unit]
+Description=6529 Public Stack Alert Checks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/sovereign-vpn
+Environment=NODE_ENV=production
+EnvironmentFile=-/root/sovereign-vpn/site-app/6529-zk-api/.env.production.local
+EnvironmentFile=-/root/sovereign-vpn/deploy/public-alerts.env
+ExecStart=/usr/bin/env python3 /root/sovereign-vpn/deploy/public_stack_alerts.py
+

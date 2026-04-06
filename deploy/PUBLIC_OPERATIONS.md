@@ -74,6 +74,49 @@ cd /home/maybe/repos/sovereign-vpn
 ./deploy/deploy-public-anon.sh
 ```
 
+## Alerting
+
+Install the public-stack alert runner on the droplet:
+
+```bash
+cd /home/maybe/repos/sovereign-vpn
+./deploy/install-public-alerts.sh
+```
+
+The timer runs [public_stack_alerts.py](/home/maybe/repos/sovereign-vpn/deploy/public_stack_alerts.py) every minute through:
+
+- [sovereign-public-alerts.service](/home/maybe/repos/sovereign-vpn/deploy/sovereign-public-alerts.service)
+- [sovereign-public-alerts.timer](/home/maybe/repos/sovereign-vpn/deploy/sovereign-public-alerts.timer)
+
+Alert env lives on the droplet at:
+
+```bash
+/root/sovereign-vpn/deploy/public-alerts.env
+```
+
+If `ALERT_WEBHOOK_URL` is already set in `/root/sovereign-vpn/site-app/6529-zk-api/.env.production.local`,
+the runner will reuse it automatically. Otherwise set it in `public-alerts.env`.
+
+Verify alert runner state:
+
+```bash
+ssh root@142.93.159.175 "systemctl status sovereign-public-alerts.timer --no-pager"
+ssh root@142.93.159.175 "journalctl -u sovereign-public-alerts.service -n 50 --no-pager"
+PUBLIC_ALERT_REMOTE_HOST=root@142.93.159.175 python3 deploy/public_stack_alerts.py --dry-run
+```
+
+Current automated checks:
+
+- public frontend reachability
+- gateway `/health`
+- `zk-api` `/api/health`
+- `zk-api` `/api/meta`, including anonymous enablement and client API URL
+- `/session/info`
+- `/subscription/tiers`
+- `sovereign-gateway.service`
+- `sovereign-zk-api.service`
+- `wg0`
+
 ## Verify A Live User Tunnel
 
 From the user device:
@@ -111,9 +154,9 @@ ssh root@142.93.159.175 "\
   systemctl status sovereign-gateway --no-pager"
 ```
 
-## Current Manual Alert Checks
+## Manual Backup Checks
 
-Actual external alert routing is still not wired. Until that exists, the manual checks to run are:
+If the alert timer itself is suspected, the manual checks to run are still:
 
 - `./deploy/check-public-stack.sh`
 - `./deploy/check-live-privacy.sh`
@@ -121,15 +164,7 @@ Actual external alert routing is still not wired. Until that exists, the manual 
 - `ssh root@142.93.159.175 "systemctl is-active sovereign-zk-api"`
 - `ssh root@142.93.159.175 "sudo wg show wg0"`
 
-## Open Gap
+## Remaining Input
 
-The current stack now has:
-
-- live privacy audit commands
-- reduced gateway log sensitivity
-- a `1h` journald retention override
-
-It does not yet have:
-
-- hosted alert routing
-- paging/integration with a real alert destination
+The alert runner is now deployable and stateful. The only remaining operator input is a real
+`ALERT_WEBHOOK_URL` destination if you want external paging/delivery instead of on-box logs only.
