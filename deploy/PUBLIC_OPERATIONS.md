@@ -97,6 +97,16 @@ Alert env lives on the droplet at:
 If `ALERT_WEBHOOK_URL` is already set in `/root/sovereign-vpn/site-app/6529-zk-api/.env.production.local`,
 the runner will reuse it automatically. Otherwise set it in `public-alerts.env`.
 
+Telegram is also supported directly by the alert runner. Set these in
+`public-alerts.env` if you want alerts sent to a bot instead of, or in addition
+to, a generic webhook:
+
+```bash
+ALERT_TELEGRAM_BOT_TOKEN=<bot-token>
+ALERT_TELEGRAM_CHAT_ID=<chat-id>
+ALERT_TELEGRAM_MESSAGE_THREAD_ID=<topic-id>   # optional
+```
+
 Verify alert runner state:
 
 ```bash
@@ -166,5 +176,8 @@ If the alert timer itself is suspected, the manual checks to run are still:
 
 ## Remaining Input
 
-The alert runner is now deployable and stateful. The only remaining operator input is a real
-`ALERT_WEBHOOK_URL` destination if you want external paging/delivery instead of on-box logs only.
+The alert runner is now deployable and stateful. The remaining operator input is
+a real external delivery destination:
+
+- `ALERT_WEBHOOK_URL` for a generic JSON webhook
+- or `ALERT_TELEGRAM_BOT_TOKEN` plus `ALERT_TELEGRAM_CHAT_ID` for Telegram

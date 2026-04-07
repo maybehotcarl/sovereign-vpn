@@ -50,6 +50,9 @@ class Config:
     environment: str
     webhook_url: str | None
     webhook_bearer_token: str | None
+    telegram_bot_token: str | None
+    telegram_chat_id: str | None
+    telegram_message_thread_id: str | None
     gateway_service_name: str
     zk_api_service_name: str
     wg_interface: str
@@ -138,6 +141,9 @@ def load_config() -> Config:
     service_name = os.getenv("PUBLIC_ALERT_SERVICE_NAME", "6529-public-stack").strip()
     webhook_url = os.getenv("ALERT_WEBHOOK_URL", "").strip() or None
     webhook_bearer_token = os.getenv("ALERT_WEBHOOK_BEARER_TOKEN", "").strip() or None
+    telegram_bot_token = os.getenv("ALERT_TELEGRAM_BOT_TOKEN", "").strip() or None
+    telegram_chat_id = os.getenv("ALERT_TELEGRAM_CHAT_ID", "").strip() or None
+    telegram_message_thread_id = os.getenv("ALERT_TELEGRAM_MESSAGE_THREAD_ID", "").strip() or None
 
     return Config(
         public_site_url=public_site_url,
@@ -146,6 +152,9 @@ def load_config() -> Config:
         environment=environment,
         webhook_url=webhook_url,
         webhook_bearer_token=webhook_bearer_token,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        telegram_message_thread_id=telegram_message_thread_id,
         gateway_service_name=os.getenv("PUBLIC_ALERT_GATEWAY_SERVICE_NAME", "sovereign-gateway").strip(),
         zk_api_service_name=os.getenv("PUBLIC_ALERT_ZK_API_SERVICE_NAME", "sovereign-zk-api").strip(),
         wg_interface=os.getenv("PUBLIC_ALERT_WG_INTERFACE", "wg0").strip(),
@@ -188,7 +197,16 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def post_alert(config: Config, payload: dict[str, Any]) -> None:
+def configured_delivery_channels(config: Config) -> list[str]:
+    channels: list[str] = []
+    if config.webhook_url:
+        channels.append("webhook")
+    if config.telegram_bot_token and config.telegram_chat_id:
+        channels.append("telegram")
+    return channels
+
+
+def post_webhook_alert(config: Config, payload: dict[str, Any]) -> None:
     if not config.webhook_url:
         return
     data = json.dumps(payload).encode("utf-8")
@@ -202,6 +220,64 @@ def post_alert(config: Config, payload: dict[str, Any]) -> None:
     with urllib_request.urlopen(req, timeout=config.http_timeout_seconds) as resp:
         if resp.status < 200 or resp.status >= 300:
             raise RuntimeError(f"alert webhook returned status {resp.status}")
+
+
+def format_telegram_alert(payload: dict[str, Any]) -> str:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    context_json = json.dumps(context, sort_keys=True, separators=(", ", ": ")) if context else "{}"
+    lines = [
+        f"[{str(payload.get('severity', 'warning')).upper()}] {payload.get('service', '6529-public-stack')}",
+        f"env: {payload.get('environment', 'production')}",
+        f"type: {payload.get('alertType', 'public_stack_alert')}",
+        f"message: {payload.get('message', '')}",
+        f"time: {payload.get('timestamp', now_iso())}",
+    ]
+    if context and context_json != "{}":
+        lines.append(f"context: {context_json}")
+    return "\n".join(lines)
+
+
+def post_telegram_alert(config: Config, payload: dict[str, Any]) -> None:
+    if not config.telegram_bot_token or not config.telegram_chat_id:
+        return
+    url = f"https://api.telegram.org/bot{config.telegram_bot_token}/sendMessage"
+    body: dict[str, Any] = {
+        "chat_id": config.telegram_chat_id,
+        "text": format_telegram_alert(payload),
+        "disable_web_page_preview": True,
+    }
+    if config.telegram_message_thread_id:
+        try:
+            body["message_thread_id"] = int(config.telegram_message_thread_id, 10)
+        except ValueError as exc:
+            raise RuntimeError("ALERT_TELEGRAM_MESSAGE_THREAD_ID must be an integer") from exc
+    data = json.dumps(body).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "6529-public-alerts/1.0",
+    }
+    req = urllib_request.Request(url, data=data, headers=headers, method="POST")
+    with urllib_request.urlopen(req, timeout=config.http_timeout_seconds) as resp:
+        response_body = resp.read().decode("utf-8", "replace")
+        if resp.status < 200 or resp.status >= 300:
+            raise RuntimeError(f"telegram returned status {resp.status}")
+    try:
+        parsed = json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("telegram returned non-JSON response") from exc
+    if not isinstance(parsed, dict) or not parsed.get("ok"):
+        raise RuntimeError(f"telegram sendMessage failed: {parsed}")
+
+
+def post_alert(config: Config, payload: dict[str, Any]) -> list[str]:
+    delivered: list[str] = []
+    if config.webhook_url:
+        post_webhook_alert(config, payload)
+        delivered.append("webhook")
+    if config.telegram_bot_token and config.telegram_chat_id:
+        post_telegram_alert(config, payload)
+        delivered.append("telegram")
+    return delivered
 
 
 def check_frontend(config: Config) -> CheckResult:
@@ -794,8 +870,9 @@ def apply_notifications(
     return notifications, delivery_errors, state
 
 
-def print_human_summary(results: list[CheckResult], webhook_configured: bool, remote_host: str | None) -> None:
-    print(f"Webhook configured: {'yes' if webhook_configured else 'no'}")
+def print_human_summary(results: list[CheckResult], delivery_channels: list[str], remote_host: str | None) -> None:
+    channels_label = ", ".join(delivery_channels) if delivery_channels else "none"
+    print(f"Alert delivery channels: {channels_label}")
     print(f"Remote host checks: {remote_host if remote_host else 'local'}")
     for result in results:
         label = "OK" if result.ok else result.severity.upper()
@@ -824,6 +901,8 @@ def main() -> int:
         "environment": config.environment,
         "publicSiteUrl": config.public_site_url,
         "webhookConfigured": bool(config.webhook_url),
+        "telegramConfigured": bool(config.telegram_bot_token and config.telegram_chat_id),
+        "deliveryChannels": configured_delivery_channels(config),
         "remoteHost": config.remote_host,
         "dryRun": args.dry_run,
         "notifications": notifications,
@@ -843,7 +922,7 @@ def main() -> int:
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:
-        print_human_summary(results, bool(config.webhook_url), config.remote_host)
+        print_human_summary(results, configured_delivery_channels(config), config.remote_host)
         if notifications:
             print()
             print("Notifications:")
