@@ -142,6 +142,77 @@ Write-Host "To disconnect sooner, run: & '$wireguard' /uninstalltunnelservice 65
 `;
 }
 
+function detectClientPlatform() {
+  if (typeof navigator === 'undefined') {
+    return 'desktop';
+  }
+
+  const source = [
+    navigator.userAgentData?.platform,
+    navigator.platform,
+    navigator.userAgent,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/iphone|ipad|ipod|android/.test(source)) return 'mobile';
+  if (/mac/.test(source)) return 'macos';
+  if (/win/.test(source)) return 'windows';
+  if (/linux|x11/.test(source)) return 'linux';
+  return 'desktop';
+}
+
+function getPlatformSetup(platform) {
+  switch (platform) {
+    case 'macos':
+      return {
+        name: 'Mac',
+        installLabel: 'Get WireGuard For Mac',
+        installCopy: 'If you already installed WireGuard, skip this step.',
+        importCopy: 'Open WireGuard, choose “Import tunnel(s) from file,” select `6529vpn.conf`, then switch the tunnel on.',
+        helperLabel: 'Download macOS auto-disconnect helper',
+        helperCopy: 'Advanced: use this if you want the tunnel to shut itself off automatically when the session lease ends.',
+      };
+    case 'windows':
+      return {
+        name: 'Windows PC',
+        installLabel: 'Get WireGuard For Windows',
+        installCopy: 'If WireGuard is already installed, go straight to step 2.',
+        importCopy: 'Open WireGuard, import `6529vpn.conf`, then activate the tunnel.',
+        helperLabel: 'Download Windows auto-disconnect helper',
+        helperCopy: 'Advanced: installs the tunnel service and schedules an automatic disconnect at lease expiry.',
+      };
+    case 'linux':
+      return {
+        name: 'Linux device',
+        installLabel: 'Get WireGuard For Linux',
+        installCopy: 'If your distro already has WireGuard installed, skip this step.',
+        importCopy: 'Import `6529vpn.conf` into WireGuard, or use the Linux helper below if you want automatic disconnect at expiry.',
+        helperLabel: 'Download Linux auto-disconnect helper',
+        helperCopy: 'Advanced: writes the config, starts the tunnel with `wg-quick`, and tears it down automatically when the lease ends.',
+      };
+    case 'mobile':
+      return {
+        name: 'device',
+        installLabel: 'Get WireGuard',
+        installCopy: 'Install the WireGuard app for your device before downloading the config.',
+        importCopy: 'Download `6529vpn.conf`, import it into WireGuard, then activate the tunnel.',
+        helperLabel: null,
+        helperCopy: '',
+      };
+    default:
+      return {
+        name: 'device',
+        installLabel: 'Get WireGuard',
+        installCopy: 'Install WireGuard first if this is your first time setting up the VPN.',
+        importCopy: 'Import `6529vpn.conf` into WireGuard, then switch the tunnel on.',
+        helperLabel: null,
+        helperCopy: '',
+      };
+  }
+}
+
 export default function SessionDashboard({ session, onDisconnect, onReconnect, onRenew }) {
   const [timeLeft, setTimeLeft] = useState(() => formatTimeLeft(session.expiresAt));
   const [disconnecting, setDisconnecting] = useState(false);
@@ -172,6 +243,11 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   const showRenew = isSubscription && !(subscriptionExpiresAt ? subscriptionExpired : expired) && daysRemaining(renewReferenceExpiry) < 7;
   const wireGuardInstallUrl = 'https://www.wireguard.com/install/';
   const sessionExpiryLabel = formatDateTime(session.expiresAt);
+  const clientPlatform = detectClientPlatform();
+  const platformSetup = getPlatformSetup(clientPlatform);
+  const sessionTypeLabel = isAnonymousAccess ? 'Anonymous Session' : 'Direct Wallet Session';
+
+  const showPlatformHelper = clientPlatform === 'macos' || clientPlatform === 'windows' || clientPlatform === 'linux';
 
   // Fetch payout info for the connected node operator
   useEffect(() => {
@@ -205,7 +281,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
       setRenewError('Transaction failed on-chain');
       setRenewPhase('error');
     }
-  }, [renewTxConfirmed, renewTxFailed]);
+  }, [onRenew, renewPhase, renewSelected, renewTxConfirmed, renewTxFailed, session.expiresAt]);
 
   const handleDisconnect = useCallback(async () => {
     setDisconnecting(true);
@@ -339,6 +415,20 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
     );
   };
 
+  const downloadPlatformHelper = () => {
+    if (clientPlatform === 'macos') {
+      downloadMacHelper();
+      return;
+    }
+    if (clientPlatform === 'windows') {
+      downloadWindowsHelper();
+      return;
+    }
+    if (clientPlatform === 'linux') {
+      downloadLinuxHelper();
+    }
+  };
+
   const copyConfig = async () => {
     await navigator.clipboard.writeText(session.vpnConfig);
     setCopyLabel('Copied!');
@@ -379,64 +469,34 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
   // Active state
   return (
     <div className="dashboard">
-      <div className="dashboard-header active">
+      <div className="dashboard-header ready">
         <div className="dashboard-status">
-          <div className="status-dot" />
-          <span>VPN Connected</span>
+          <div className="status-dot pending" />
+          <div className="dashboard-status-copy">
+            <span className="dashboard-status-title">Session Ready</span>
+            <span className="dashboard-status-subtitle">
+              Finish the setup below before this device is actually routing traffic through 6529 VPN.
+            </span>
+          </div>
         </div>
-        <div className="dashboard-tier">
-          {isAnonymousAccess
-            ? 'Anonymous Session'
-            : isSubscription
-              ? 'Subscription'
-              : session.tier}
-        </div>
+        <div className="dashboard-tier">{sessionTypeLabel}</div>
       </div>
 
       <div className="dashboard-body">
-        {isAnonymousAccess && (
-          <div
-            style={{
-              marginBottom: 16,
-              padding: '12px',
-              border: '1px solid var(--border, #333)',
-              borderRadius: 8,
-              background: 'rgba(255,255,255,0.03)',
-            }}
-          >
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              Purchased access vs current connection
-            </div>
-            <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
-              You bought a wallet subscription. This WireGuard config is a short-lived anonymous session issued from that subscription.
-              {formattedSubscriptionExpiry ? ` Subscription active until ${formattedSubscriptionExpiry}.` : ''}
-            </div>
-          </div>
-        )}
-
-        <div
-          style={{
-            marginBottom: 16,
-            padding: '12px',
-            border: '1px solid rgba(255, 184, 77, 0.45)',
-            borderRadius: 8,
-            background: 'rgba(255, 184, 77, 0.08)',
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>
-            Avoid getting stranded when this tunnel expires
-          </div>
-          <div style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.5 }}>
-            This config is a full-tunnel WireGuard profile. If it stays active after the lease ends, your device can keep routing traffic into a dead tunnel until you disconnect it manually.
-            {sessionExpiryLabel ? ` This session is scheduled to expire at ${sessionExpiryLabel}.` : ''}
-            {' '}Use one of the helper downloads below if you want the tunnel to tear itself down automatically at expiry.
-          </div>
+        <div className="setup-hero">
+          <div className="setup-hero-kicker">Next Step</div>
+          <h3 className="setup-hero-title">Finish setup on this {platformSetup.name}</h3>
+          <p className="setup-copy" style={{ marginBottom: 0 }}>
+            {isAnonymousAccess
+              ? `You already issued a short-lived anonymous VPN lease. Now import the config into WireGuard so this device actually uses it.${formattedSubscriptionExpiry ? ` Your wallet subscription remains active until ${formattedSubscriptionExpiry}.` : ''}`
+              : 'Your wallet session is ready. The last step is importing the config into WireGuard and turning the tunnel on.'}
+          </p>
         </div>
 
         <div className="dashboard-stats">
           <div className="stat">
             <div className="stat-label">
-              {isAnonymousAccess ? 'Anonymous Session Lease' : 'Time Remaining'}
+              {isAnonymousAccess ? 'Anonymous Session Lease' : 'Session Expires In'}
             </div>
             <div className="stat-value">{timeLeft}</div>
           </div>
@@ -455,11 +515,11 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
             </div>
           )}
           <div className="stat">
-            <div className="stat-label">Client IP</div>
+            <div className="stat-label">Assigned Tunnel IP</div>
             <div className="stat-value mono">{session.clientAddress}</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Server</div>
+            <div className="stat-label">VPN Server</div>
             <div className="stat-value mono">{session.serverEndpoint}</div>
           </div>
           {payoutInfo && payoutInfo.pending_payout_wei && payoutInfo.pending_payout_wei !== '0' && (
@@ -480,103 +540,114 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
           )}
         </div>
 
+        <div className="setup-panel">
+          <h3>Use This Session With WireGuard</h3>
+          <p className="setup-copy">
+            Keep this simple: install WireGuard, download the config, import it, then switch the tunnel on.
+          </p>
+          <div className="setup-grid setup-grid-steps">
+            <div className="setup-card setup-step-card">
+              <div className="setup-step-number">1</div>
+              <div className="setup-label">Install WireGuard</div>
+              <div className="setup-text">{platformSetup.installCopy}</div>
+              <div className="btn-row setup-card-actions">
+                <a
+                  className="btn-secondary"
+                  href={wireGuardInstallUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ padding: '10px 20px', fontSize: '0.85rem', textDecoration: 'none' }}
+                >
+                  {platformSetup.installLabel}
+                </a>
+              </div>
+            </div>
+            <div className="setup-card setup-step-card">
+              <div className="setup-step-number">2</div>
+              <div className="setup-label">Download your config</div>
+              <div className="setup-text">This file contains the exact tunnel settings for this session.</div>
+              <div className="btn-row setup-card-actions">
+                <button
+                  className="btn-primary"
+                  onClick={downloadConfig}
+                  style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+                >
+                  Download Config
+                </button>
+              </div>
+            </div>
+            <div className="setup-card setup-step-card">
+              <div className="setup-step-number">3</div>
+              <div className="setup-label">Import it and turn the tunnel on</div>
+              <div className="setup-text">{platformSetup.importCopy}</div>
+            </div>
+          </div>
+        </div>
+
         <div className="dashboard-actions">
-          <button
-            className="btn-primary"
-            onClick={openDesktopApp}
-            style={{ padding: '10px 20px', fontSize: '0.85rem' }}
-          >
-            Open in Desktop App
-          </button>
-          {showRenew && (
-            <button
-              className="btn-primary"
-              onClick={handleRenewClick}
-              disabled={renewPhase !== 'idle' && renewPhase !== 'error' && renewPhase !== 'done'}
-              style={{ padding: '10px 20px', fontSize: '0.85rem' }}
-            >
-              Renew
-            </button>
-          )}
-          <button
-            className="btn-primary"
-            onClick={downloadConfig}
-            style={{ padding: '10px 20px', fontSize: '0.85rem' }}
-          >
-            Download Config
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={() => setShowConfig(!showConfig)}
-            style={{ padding: '10px 20px', fontSize: '0.85rem' }}
-          >
-            {showConfig ? 'Hide Raw Config' : 'Advanced: View Raw Config'}
-          </button>
           <button
             className="btn-disconnect"
             onClick={handleDisconnect}
             disabled={disconnecting}
           >
-            {disconnecting ? 'Disconnecting...' : 'Disconnect'}
+            {disconnecting ? 'Ending Session...' : 'End Session'}
           </button>
         </div>
 
-        <div className="setup-panel">
-          <h3>Use With WireGuard</h3>
-          <p className="setup-copy">
-            Best path: hand this session off to the desktop app so it can own the tunnel lifecycle. If you stay on the raw WireGuard path, use one of the helper downloads so the tunnel disconnects itself at expiry.
-          </p>
-          <div className="btn-row" style={{ justifyContent: 'flex-start' }}>
-            <button className="btn-primary" onClick={openDesktopApp} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
-              Open in Desktop App
-            </button>
-            <button className="btn-primary" onClick={downloadConfig} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
-              Download Raw Config
-            </button>
-            <a
-              className="btn-secondary"
-              href={wireGuardInstallUrl}
-              target="_blank"
-              rel="noreferrer"
-              style={{ padding: '10px 20px', fontSize: '0.85rem', textDecoration: 'none' }}
-            >
-              Get WireGuard
-            </a>
+        <details className="advanced-panel">
+          <summary className="advanced-summary">
+            <span>Advanced Options</span>
+            <span className="advanced-summary-copy">Desktop app, auto-disconnect helpers, renew, and raw config</span>
+          </summary>
+          <div className="advanced-body">
+            <div className="setup-note">
+              This is a full-tunnel WireGuard profile. If it stays active after the lease ends, your device can keep sending traffic into a dead tunnel until you disconnect it manually.
+              {sessionExpiryLabel ? ` This session is scheduled to expire at ${sessionExpiryLabel}.` : ''}
+            </div>
+
+            <div className="advanced-actions">
+              {clientPlatform === 'linux' && (
+                <button
+                  className="btn-primary"
+                  onClick={openDesktopApp}
+                  style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+                >
+                  Open In Desktop App
+                </button>
+              )}
+              {showPlatformHelper && (
+                <button
+                  className="btn-secondary"
+                  onClick={downloadPlatformHelper}
+                  style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+                >
+                  {platformSetup.helperLabel}
+                </button>
+              )}
+              {showRenew && (
+                <button
+                  className="btn-primary"
+                  onClick={handleRenewClick}
+                  disabled={renewPhase !== 'idle' && renewPhase !== 'error' && renewPhase !== 'done'}
+                  style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+                >
+                  Renew Subscription
+                </button>
+              )}
+              <button
+                className="btn-secondary"
+                onClick={() => setShowConfig(!showConfig)}
+                style={{ padding: '10px 20px', fontSize: '0.85rem' }}
+              >
+                {showConfig ? 'Hide Raw Config' : 'View Raw Config'}
+              </button>
+            </div>
+
+            {showPlatformHelper && (
+              <p className="advanced-copy">{platformSetup.helperCopy}</p>
+            )}
           </div>
-          <div className="setup-grid">
-            <div className="setup-card">
-              <div className="setup-label">Linux Helper</div>
-              <div className="setup-text">Downloads a script that writes the config, starts the tunnel with `wg-quick`, and automatically disconnects it when the session lease ends.</div>
-              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
-                <button className="btn-primary" onClick={downloadLinuxHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
-                  Download Linux Helper
-                </button>
-              </div>
-            </div>
-            <div className="setup-card">
-              <div className="setup-label">macOS Helper</div>
-              <div className="setup-text">Downloads a script for `wireguard-tools` users that starts the tunnel and tears it down automatically at lease expiry.</div>
-              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
-                <button className="btn-primary" onClick={downloadMacHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
-                  Download macOS Helper
-                </button>
-              </div>
-            </div>
-            <div className="setup-card">
-              <div className="setup-label">Windows Helper</div>
-              <div className="setup-text">Downloads a PowerShell helper that installs the tunnel service and schedules an automatic disconnect when this lease expires.</div>
-              <div className="btn-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
-                <button className="btn-primary" onClick={downloadWindowsHelper} style={{ padding: '10px 16px', fontSize: '0.8rem' }}>
-                  Download Windows Helper
-                </button>
-              </div>
-            </div>
-            <div className="setup-card">
-              <div className="setup-label">Mobile / Manual</div>
-              <div className="setup-text">If you import the raw config into WireGuard yourself, remember to turn the tunnel off when the lease ends or after the app says the session has expired.</div>
-            </div>
-          </div>
-        </div>
+        </details>
 
         {/* Renewal panel */}
         {renewPhase === 'picking' && (
@@ -646,11 +717,11 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         )}
 
         {showConfig && (
-          <div style={{ marginTop: 16 }}>
+          <div className="advanced-config">
             <div className="config-display">{session.vpnConfig}</div>
             <div className="btn-row">
               <button className="btn-primary" onClick={downloadConfig} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
-                Download
+                Download Again
               </button>
               <button className="btn-secondary" onClick={copyConfig} style={{ padding: '10px 20px', fontSize: '0.85rem' }}>
                 {copyLabel}

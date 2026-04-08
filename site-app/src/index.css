@@ -425,6 +425,11 @@ footer a:hover { color: var(--accent); }
   border-bottom-color: var(--accent-dim);
 }
 
+.dashboard-header.ready {
+  background: rgba(78, 205, 196, 0.06);
+  border-bottom-color: rgba(78, 205, 196, 0.22);
+}
+
 .dashboard-header.expired {
   background: rgba(244, 67, 54, 0.08);
   border-bottom-color: rgba(244, 67, 54, 0.3);
@@ -435,6 +440,22 @@ footer a:hover { color: var(--accent); }
   align-items: center;
   gap: 10px;
   font-weight: 600;
+}
+
+.dashboard-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dashboard-status-title {
+  font-weight: 700;
+}
+
+.dashboard-status-subtitle {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
 }
 
 .dashboard-tier {
@@ -450,6 +471,35 @@ footer a:hover { color: var(--accent); }
 
 .dashboard-body {
   padding: 24px;
+}
+
+.status-dot.pending {
+  background: var(--accent);
+  box-shadow: 0 0 0 6px rgba(78, 205, 196, 0.12);
+}
+
+.setup-hero {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at top right, rgba(78, 205, 196, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+}
+
+.setup-hero-kicker {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.setup-hero-title {
+  margin-bottom: 8px;
+  font-size: 1.15rem;
 }
 
 .dashboard-stats {
@@ -495,7 +545,7 @@ footer a:hover { color: var(--accent); }
   margin-top: 20px;
   padding: 20px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--bg);
 }
 
@@ -518,11 +568,37 @@ footer a:hover { color: var(--accent); }
   margin-top: 16px;
 }
 
+.setup-grid-steps {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .setup-card {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255,255,255,0.02);
+}
+
+.setup-step-card {
+  position: relative;
+  padding-top: 52px;
+}
+
+.setup-step-number {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(78, 205, 196, 0.16);
+  border: 1px solid rgba(78, 205, 196, 0.3);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .setup-label {
@@ -538,6 +614,11 @@ footer a:hover { color: var(--accent); }
   color: var(--text);
   font-size: 0.88rem;
   line-height: 1.45;
+}
+
+.setup-card-actions {
+  justify-content: flex-start;
+  margin-top: 12px;
 }
 
 .btn-disconnect {
@@ -626,6 +707,67 @@ footer a:hover { color: var(--accent); }
   background: var(--bg);
 }
 
+.advanced-panel {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+}
+
+.advanced-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-summary-copy {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.82rem;
+}
+
+.advanced-body {
+  padding: 0 18px 18px;
+}
+
+.advanced-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.advanced-copy {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin-top: 12px;
+}
+
+.setup-note {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 184, 77, 0.45);
+  border-radius: 10px;
+  background: rgba(255, 184, 77, 0.08);
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.advanced-config {
+  margin-top: 16px;
+}
+
 @media (max-width: 600px) {
   .hero {
     padding-top: 56px;
@@ -650,6 +792,13 @@ footer a:hover { color: var(--accent); }
     align-items: flex-start;
   }
   .dashboard-actions {
+    flex-direction: column;
+  }
+  .advanced-summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .advanced-actions {
     flex-direction: column;
   }
   .tier-picker {
