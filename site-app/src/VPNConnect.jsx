@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import { useAccount, usePublicClient, useSignMessage, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useState, useCallback } from 'react';
+import { useAccount, usePublicClient, useSignMessage, useWriteContract } from 'wagmi';
 import { formatEther } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { generateKeyPair } from './wgkeys';
@@ -251,17 +251,11 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
   // Paid tier state
   const [verifyData, setVerifyData] = useState(null);
-  const [paymentTxHash, setPaymentTxHash] = useState(null);
   const [paymentIntent, setPaymentIntent] = useState(null); // null | { kind: 'legacy-connect' | 'anon-subscription' }
 
   // Tier picker state
   const [selectedTier, setSelectedTier] = useState(null); // '24h' or `subscription:<tierId>`
   const [tierOptions, setTierOptions] = useState(null); // { mode, session, subscriptions }
-
-  // Watch for tx confirmation
-  const { isSuccess: txConfirmed, isError: txFailed } = useWaitForTransactionReceipt({
-    hash: paymentTxHash,
-  });
 
   const markDone = (idx, text) => {
     setCompletedSteps(prev => ({ ...prev, [idx]: text }));
@@ -714,7 +708,6 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setErrorMsg('');
 
     setVerifyData(null);
-    setPaymentTxHash(null);
     setPaymentIntent(null);
     setSelectedTier(null);
     setTierOptions(null);
@@ -732,59 +725,6 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
       setPhase('error');
     }
   }, [startAnonymousVPN, startDirectWalletVPN, usingAnonymousMode]);
-
-  const handlePayAndConnect = useCallback(async () => {
-    if (!selectedTier || !tierOptions) return;
-
-    try {
-      let hash;
-      const paymentStepIndex =
-        paymentIntent?.kind === 'anon-subscription' ? 1 : 3;
-      const confirmStepIndex =
-        paymentIntent?.kind === 'anon-subscription' ? 2 : 4;
-
-      if (tierOptions.mode === 'legacy' && selectedTier === '24h') {
-        // 24h session via SessionManager
-        const info = tierOptions.session;
-        hash = await writeContractAsync({
-          address: info.contract,
-          abi: SESSION_MANAGER_ABI,
-          functionName: 'openSession',
-          args: [info.node, BigInt(info.duration)],
-          value: BigInt(info.costWei),
-        });
-      } else {
-        // Subscription via SubscriptionManager
-        const tier = tierOptions.subscriptions.find(
-          t => subscriptionOptionKey(t.id) === selectedTier
-        );
-        if (!tier) {
-          throw new Error('Select a valid subscription plan.');
-        }
-        hash = await writeContractAsync({
-          address: tier.contract,
-          abi: SUBSCRIPTION_MANAGER_ABI,
-          functionName: 'subscribe',
-          args: [tierOptions.session.node, tier.id],
-          value: BigInt(tier.costWei),
-        });
-      }
-
-      markDone(
-        paymentStepIndex,
-        paymentIntent?.kind === 'anon-subscription'
-          ? 'Subscription transaction sent'
-          : 'Payment sent'
-      );
-      setCurrentStep(confirmStepIndex);
-      setPaymentTxHash(hash);
-      // useWaitForTransactionReceipt will trigger continueAfterPayment via useEffect
-    } catch (err) {
-      console.error(err);
-      setErrorMsg(err.message || 'Payment failed');
-      setPhase('error');
-    }
-  }, [paymentIntent, selectedTier, tierOptions, writeContractAsync]);
 
   const continueAfterPayment = useCallback(async () => {
     try {
@@ -831,20 +771,80 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     }
   }, [startVPN]);
 
-  // When tx confirms, continue the flow
-  useEffect(() => {
-    if (txConfirmed && phase === 'payment' && paymentIntent?.kind === 'anon-subscription') {
-      continueAnonymousAfterSubscription();
-      return;
-    }
-    if (txConfirmed && phase === 'payment' && verifyData) {
-      continueAfterPayment();
-    }
-    if (txFailed && phase === 'payment') {
-      setErrorMsg('Transaction failed on-chain');
+  const handlePayAndConnect = useCallback(async () => {
+    if (!selectedTier || !tierOptions) return;
+
+    try {
+      let hash;
+      const paymentStepIndex =
+        paymentIntent?.kind === 'anon-subscription' ? 1 : 3;
+      const confirmStepIndex =
+        paymentIntent?.kind === 'anon-subscription' ? 2 : 4;
+
+      if (tierOptions.mode === 'legacy' && selectedTier === '24h') {
+        // 24h session via SessionManager
+        const info = tierOptions.session;
+        hash = await writeContractAsync({
+          address: info.contract,
+          abi: SESSION_MANAGER_ABI,
+          functionName: 'openSession',
+          args: [info.node, BigInt(info.duration)],
+          value: BigInt(info.costWei),
+        });
+      } else {
+        // Subscription via SubscriptionManager
+        const tier = tierOptions.subscriptions.find(
+          t => subscriptionOptionKey(t.id) === selectedTier
+        );
+        if (!tier) {
+          throw new Error('Select a valid subscription plan.');
+        }
+        hash = await writeContractAsync({
+          address: tier.contract,
+          abi: SUBSCRIPTION_MANAGER_ABI,
+          functionName: 'subscribe',
+          args: [tierOptions.session.node, tier.id],
+          value: BigInt(tier.costWei),
+        });
+      }
+
+      markDone(
+        paymentStepIndex,
+        paymentIntent?.kind === 'anon-subscription'
+          ? 'Subscription transaction sent'
+          : 'Payment sent'
+      );
+      setCurrentStep(confirmStepIndex);
+      markDone(confirmStepIndex, 'Transaction submitted; waiting for confirmation');
+      if (!publicClient) {
+        throw new Error('Public RPC client unavailable for transaction confirmation.');
+      }
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== 'success') {
+        throw new Error('Transaction failed on-chain');
+      }
+
+      if (paymentIntent?.kind === 'anon-subscription') {
+        await continueAnonymousAfterSubscription();
+        return;
+      }
+
+      await continueAfterPayment();
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err.message || 'Payment failed');
       setPhase('error');
     }
-  }, [continueAfterPayment, continueAnonymousAfterSubscription, paymentIntent, phase, txConfirmed, txFailed, verifyData]);
+  }, [
+    continueAfterPayment,
+    continueAnonymousAfterSubscription,
+    paymentIntent,
+    publicClient,
+    selectedTier,
+    tierOptions,
+    writeContractAsync,
+  ]);
 
   const downloadConfig = () => {
     const blob = new Blob([vpnConfig], { type: 'text/plain' });
@@ -872,7 +872,6 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     setTierInfo('');
 
     setVerifyData(null);
-    setPaymentTxHash(null);
     setPaymentIntent(null);
     setSelectedTier(null);
     setTierOptions(null);
