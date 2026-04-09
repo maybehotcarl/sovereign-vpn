@@ -1,8 +1,12 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -65,6 +69,88 @@ func (s *Server) clearSessionPeerState(sessionID string, gatewayInstanceID strin
 	}
 
 	return firstErr
+}
+
+func (s *Server) disconnectSessionPeers(session *nftgate.Session) error {
+	if s == nil || session == nil || s.peerStates == nil || strings.TrimSpace(session.ID) == "" {
+		return nil
+	}
+
+	states, err := s.peerStates.ListBySession(session.ID)
+	if err != nil {
+		return fmt.Errorf("listing peer state for session cleanup: %w", err)
+	}
+
+	var firstErr error
+	for _, state := range states {
+		if state == nil || strings.TrimSpace(state.PublicKey) == "" {
+			continue
+		}
+
+		if state.GatewayInstanceID == "" || state.GatewayInstanceID == s.currentGatewayInstanceID() {
+			if err := s.removeTrackedPeer(state.PublicKey); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("removing local peer during session cleanup: %w", err)
+			}
+			if err := s.deletePeerOwner(state.PublicKey); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("releasing peer reservation during session cleanup: %w", err)
+			}
+			if err := s.deletePeerState(state.PublicKey); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("deleting peer state during session cleanup: %w", err)
+			}
+			continue
+		}
+
+		if !s.forwardingEnabled() || strings.TrimSpace(s.ownerForwardBaseURL(session)) == "" {
+			continue
+		}
+
+		body, err := json.Marshal(ConnectRequest{
+			SessionToken: session.Token,
+			PublicKey:    state.PublicKey,
+		})
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("encoding forwarded session cleanup request: %w", err)
+			}
+			continue
+		}
+
+		resp, err := s.forwardToOwner(
+			context.Background(),
+			session,
+			http.MethodPost,
+			internalForwardDisconnectPath,
+			body,
+			"",
+		)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("forwarding session cleanup disconnect: %w", err)
+			}
+			continue
+		}
+
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode/100 != 2 && firstErr == nil {
+			firstErr = fmt.Errorf("forwarded session cleanup returned status %d", resp.StatusCode)
+		}
+	}
+
+	return firstErr
+}
+
+func (s *Server) removeTrackedPeer(publicKey string) error {
+	if s == nil || s.wg == nil || strings.TrimSpace(publicKey) == "" {
+		return nil
+	}
+	if err := s.recoverPeerIfNeeded(publicKey); err != nil {
+		return err
+	}
+	if s.wg.GetPeer(publicKey) == nil {
+		return nil
+	}
+	return s.wg.RemovePeer(publicKey)
 }
 
 func (s *Server) clearDeadSessionOwnership(session *nftgate.Session) (*nftgate.Session, error) {

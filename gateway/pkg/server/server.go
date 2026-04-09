@@ -525,6 +525,18 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	previousSession, err := s.gate.GetSessionWithError(auth.Address)
+	if err != nil {
+		log.Printf("Error loading previous session: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "session backend unavailable")
+		return
+	}
+	if previousSession != nil {
+		if err := s.disconnectSessionPeers(previousSession); err != nil {
+			log.Printf("Warning: failed to disconnect previous session peers for %s: %v", auth.Address.Hex(), err)
+		}
+	}
+
 	// Step 4: Create a session
 	session, err := s.gate.CreateSessionWithError(auth.Address, result.Tier)
 	if err != nil {

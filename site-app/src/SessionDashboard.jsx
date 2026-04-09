@@ -543,7 +543,7 @@ export default function SessionDashboard({ session, onDisconnect, onReconnect, o
         <div className="setup-panel">
           <h3>Use This Session With WireGuard</h3>
           <p className="setup-copy">
-            Keep this simple: install WireGuard, download the config, import it, then switch the tunnel on.
+            WireGuard is the VPN app that actually creates the secure tunnel on your device. Keep this simple: install WireGuard, download the config, import it, then switch the tunnel on.
           </p>
           <div className="setup-grid setup-grid-steps">
             <div className="setup-card setup-step-card">

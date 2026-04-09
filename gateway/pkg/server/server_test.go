@@ -514,6 +514,58 @@ func TestHandleVPNDisconnectRecoversPeerStateOnDemand(t *testing.T) {
 	}
 }
 
+func TestDisconnectSessionPeersRemovesExistingLocalPeer(t *testing.T) {
+	s, gate, session := newAffinityTestServer(t, "gw-a", "https://gw-a.example.com")
+
+	connectReq := httptest.NewRequest(
+		http.MethodPost,
+		"/vpn/connect",
+		strings.NewReader(`{"session_token":"`+session.Token+`","public_key":"wg_pub_existing"}`),
+	)
+	connectReq.Header.Set("Content-Type", "application/json")
+	connectRec := httptest.NewRecorder()
+
+	s.handleVPNConnect(connectRec, connectReq)
+
+	if connectRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", connectRec.Code)
+	}
+	if s.wg.PeerCount() != 1 {
+		t.Fatalf("PeerCount = %d, want 1", s.wg.PeerCount())
+	}
+
+	stored := gate.GetSessionByToken(session.Token)
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+
+	if err := s.disconnectSessionPeers(stored); err != nil {
+		t.Fatalf("disconnectSessionPeers: %v", err)
+	}
+	if s.wg.PeerCount() != 0 {
+		t.Fatalf("PeerCount after cleanup = %d, want 0", s.wg.PeerCount())
+	}
+	if s.wg.GetPeer("wg_pub_existing") != nil {
+		t.Fatal("expected previous peer to be removed")
+	}
+
+	state, err := s.peerStates.Get("wg_pub_existing")
+	if err != nil {
+		t.Fatalf("peerStates.Get: %v", err)
+	}
+	if state != nil {
+		t.Fatal("expected previous peer state to be removed")
+	}
+
+	owned, err := s.peerOwnedBy("wg_pub_existing", stored.ID)
+	if err != nil {
+		t.Fatalf("peerOwnedBy: %v", err)
+	}
+	if owned {
+		t.Fatal("expected previous peer reservation to be removed")
+	}
+}
+
 func TestHandleVPNDisconnectForwardsToOwnerGateway(t *testing.T) {
 	sharedGate, err := nftgate.NewGateWithOptions(nil, time.Hour, nftgate.GateOptions{
 		SessionSigningSecret: "test-signing-secret",
