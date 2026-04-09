@@ -256,6 +256,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   // Tier picker state
   const [selectedTier, setSelectedTier] = useState(null); // '24h' or `subscription:<tierId>`
   const [tierOptions, setTierOptions] = useState(null); // { mode, session, subscriptions }
+  const walletReady = isConnected && typeof address === 'string' && address.trim().length > 0;
 
   const markDone = (idx, text) => {
     setCompletedSteps(prev => ({ ...prev, [idx]: text }));
@@ -609,6 +610,9 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
   ]);
 
   const startDirectWalletVPN = useCallback(async function runDirectWalletVPN(allowRetry = true) {
+    if (!walletReady) {
+      throw new Error('Wallet connection is not ready yet. Reconnect your wallet, wait for the address to load, then try again.');
+    }
     // Step 0: Get challenge
       const challengeResp = await fetch(`${gatewayUrl}/auth/challenge`, {
         method: 'POST',
@@ -698,7 +702,7 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
 
       // Free tier: continue directly to VPN provisioning
       await provisionVPN(vData, 3);
-  }, [address, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync]);
+  }, [address, gatewayUrl, loadGatewayPaymentOptions, provisionVPN, signMessageAsync, walletReady]);
 
   const startVPN = useCallback(async () => {
     setPhase('running');
@@ -1036,15 +1040,15 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
         )}
 
         {/* Idle: show sign-in button once wallet is connected */}
-        {phase === 'idle' && !usingAnonymousMode && isConnected && (
+        {phase === 'idle' && !usingAnonymousMode && walletReady && (
           <button className="btn-primary" onClick={startVPN} style={{ marginTop: 16 }}>
             Sign In & Get VPN Config
           </button>
         )}
 
-        {phase === 'idle' && !usingAnonymousMode && !isConnected && (
+        {phase === 'idle' && !usingAnonymousMode && !walletReady && (
           <p style={{ color: 'var(--muted)', marginTop: 16, fontSize: '0.85rem' }}>
-            Connect your wallet to start a direct wallet-bound VPN session.
+            Connect your wallet and wait for the address to finish loading before starting a direct wallet-bound VPN session.
           </p>
         )}
 

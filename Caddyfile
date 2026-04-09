@@ -3,28 +3,28 @@
 	# they must be redacted and purged within 1 hour.
 	# API routes — reverse proxy to gateway container
 	handle /auth/* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /vpn/* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /session/* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /subscription/* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /nodes* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /health {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /payout/* {
-		reverse_proxy localhost:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle /api/* {
-		reverse_proxy localhost:3002
+		reverse_proxy 127.0.0.1:3002
 	}
 
 	# Everything else — static frontend with SPA fallback
