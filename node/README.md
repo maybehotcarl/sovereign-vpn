@@ -2,23 +2,86 @@
 
 Run a 6529 VPN node with Docker. Community members can connect to your node using the 6529vpn.io site or the `svpn` CLI.
 
-## Quick Start
+## North-Star Quick Start
 
-### 1. Get a VPS
-
-Any provider works (DigitalOcean, Hetzner, Vultr, etc.). Requirements:
-- Ubuntu 22.04+ (or any Linux with Docker)
-- 1 vCPU / 1 GB RAM minimum
-- A public IPv4 address
-- Ports open: 8080/tcp (gateway), 51820/udp (WireGuard)
-
-### 2. Install Docker
+Start from a fresh Ubuntu 22.04+ VPS with a public IPv4 address and ports `8080/tcp` and `51820/udp` open.
 
 ```bash
-curl -fsSL https://get.docker.com | sh
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh | sudo bash
 ```
 
-### 3. Clone & Configure
+The installer:
+
+- installs Docker when missing;
+- clones or updates this repo at `/opt/sovereign-vpn`;
+- detects the public IP;
+- writes `node/.env` with mainnet defaults;
+- opens UFW ports when UFW is installed;
+- starts the node with Docker Compose;
+- waits for `http://127.0.0.1:8080/health`.
+
+First run builds the local Docker image, so it can take a few minutes.
+
+## Common Installer Options
+
+Use your own RPC endpoint:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- --eth-rpc "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
+```
+
+Set a public DNS name or override IP detection:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- --public-ip "vpn.example.com"
+```
+
+Enable delegated wallet checks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- --enable-delegation
+```
+
+Use a specific repo ref while testing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- --repo-ref "my-branch"
+```
+
+The operator dashboard generates the longer form with enrollment metadata:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- \
+      --enroll "generated-token" \
+      --operator "0xYourWallet" \
+      --region "us-east"
+```
+
+Today those values are stored in `node/.env` for dashboard/control-plane follow-up. They are intentionally safe metadata, not private keys.
+
+## Registration And Heartbeats
+
+Registration is still evolving toward the target operator-dashboard flow.
+
+Current optional path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
+  | sudo bash -s -- \
+      --node-registry "0x..." \
+      --heartbeat-key "LOW_PRIVILEGE_HEARTBEAT_KEY"
+```
+
+Do not use a main wallet private key as a heartbeat key. The target design is browser-wallet registration plus a low-privilege delegated heartbeat signer.
+
+## Manual Docker Path
+
+Use this if you are developing locally or changing the node image.
 
 ```bash
 git clone https://github.com/maybehotcarl/sovereign-vpn.git
@@ -26,55 +89,21 @@ cd sovereign-vpn/node
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
-- `ETH_RPC_URL` — your Ethereum RPC endpoint (Alchemy, Infura, etc.)
-- `PUBLIC_IP` — your server's public IP address
-- `MEMES_CONTRACT` — The Memes ERC-1155 contract address
-
-### 4. Launch
+Edit `.env` if needed, then launch:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-Verify it's running:
+Verify it is running:
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-### 5. Set Up TLS with Caddy
+## TLS
 
-Point a domain at your server's IP, then install Caddy:
-
-```bash
-apt install -y caddy
-```
-
-Example `/etc/caddy/Caddyfile`:
-
-```
-your-node.example.com {
-    reverse_proxy localhost:8080
-}
-```
-
-```bash
-systemctl restart caddy
-```
-
-Caddy automatically provisions Let's Encrypt certificates.
-
-### 6. (Optional) Register on NodeRegistry
-
-To appear in the node list on 6529vpn.io, register your node on-chain and enable heartbeats. Add to your `.env`:
-
-```env
-NODE_REGISTRY=0x...
-HEARTBEAT_KEY=your_operator_private_key_hex
-```
-
-Then restart: `docker compose up -d`
+The current node gateway listens on HTTP by default. For browser-based production use, put HTTPS in front of the gateway with Caddy, a managed node subdomain, or the upcoming operator-dashboard flow.
 
 ## Configuration Reference
 

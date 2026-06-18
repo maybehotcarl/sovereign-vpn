@@ -189,7 +189,8 @@ export default function VPNConnect({ gatewayUrl = '', onSessionCreated }) {
     const challengeHash = await deriveVPNAccessV1ChallengeHash(challenge);
     const sessionKeyHash = await deriveVPNAccessV1SessionKeyHash(keys.publicKey);
 
-    const { ZKClient } = await import('../6529-zk-service/dist/browser/index.js');
+    const zkServiceModule = '../6529-zk-service/dist/browser/index.js';
+    const { ZKClient } = await import(/* @vite-ignore */ zkServiceModule);
     const zkClient = new ZKClient({
       apiUrl: config.apiUrl,
       artifactBaseUrl: config.artifactBaseUrl,

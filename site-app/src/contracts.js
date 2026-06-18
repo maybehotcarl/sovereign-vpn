@@ -28,6 +28,7 @@ export const SESSION_MANAGER_ABI = [
 ];
 
 export const NODE_REGISTRY_ADDRESS = import.meta.env.VITE_NODE_REGISTRY || '';
+export const PAYOUT_VAULT_ADDRESS = import.meta.env.VITE_PAYOUT_VAULT || '';
 
 export const NODE_REGISTRY_ABI = [
   {
