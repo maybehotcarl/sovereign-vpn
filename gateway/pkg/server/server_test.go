@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/anonauth"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/nftcheck"
+	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/siwe"
 	"github.com/maybehotcarl/sovereign-vpn/gateway/pkg/zkverify"
 )
 
@@ -37,6 +43,202 @@ func TestParseAddress(t *testing.T) {
 			t.Errorf("parseAddress(%q) = %s, want %s", tt.input, got, tt.expected)
 		}
 	}
+}
+
+func TestOperatorEnrollmentLifecycle(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+	s := newTestEnrollmentServer()
+
+	createReq := httptest.NewRequest(
+		http.MethodPost,
+		"/operator/enrollments",
+		signedEnrollmentCreateBody(t, s, key, address.Hex(), "us-east"),
+	)
+	createRec := httptest.NewRecorder()
+
+	s.handleCreateOperatorEnrollment(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d: %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+
+	var created OperatorEnrollment
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Token == "" {
+		t.Fatal("expected enrollment token")
+	}
+	if created.Operator != address.Hex() {
+		t.Fatalf("Operator = %q, want %q", created.Operator, address.Hex())
+	}
+	if created.Status != "created" {
+		t.Fatalf("Status = %q, want created", created.Status)
+	}
+
+	report := OperatorEnrollmentReport{
+		Operator:         address.Hex(),
+		Region:           "us-east",
+		Endpoint:         "203.0.113.10:51820",
+		GatewayURL:       "http://203.0.113.10:8080",
+		WireGuardPubKey:  "wg-pubkey",
+		HealthOK:         true,
+		HealthStatus:     "ok",
+		InstallerVersion: "test",
+	}
+	reportBytes, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	reportReq := httptest.NewRequest(
+		http.MethodPost,
+		"/operator/enrollments/"+created.Token+"/report",
+		bytes.NewReader(reportBytes),
+	)
+	reportRec := httptest.NewRecorder()
+
+	s.handleReportOperatorEnrollment(reportRec, reportReq)
+
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("report status = %d, want %d: %s", reportRec.Code, http.StatusOK, reportRec.Body.String())
+	}
+
+	var reported OperatorEnrollment
+	if err := json.NewDecoder(reportRec.Body).Decode(&reported); err != nil {
+		t.Fatalf("decode report response: %v", err)
+	}
+	if reported.Status != "healthy" {
+		t.Fatalf("reported Status = %q, want healthy", reported.Status)
+	}
+	if reported.Report == nil || reported.Report.Endpoint != "203.0.113.10:51820" {
+		t.Fatalf("unexpected report payload: %+v", reported.Report)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/operator/enrollments/"+created.Token, nil)
+	getRec := httptest.NewRecorder()
+
+	s.handleGetOperatorEnrollment(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d: %s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+
+	var fetched OperatorEnrollment
+	if err := json.NewDecoder(getRec.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if fetched.Status != "healthy" {
+		t.Fatalf("fetched Status = %q, want healthy", fetched.Status)
+	}
+}
+
+func TestOperatorEnrollmentRejectsInvalidOperator(t *testing.T) {
+	s := newTestEnrollmentServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/operator/enrollments", strings.NewReader(`{"operator":"nope","region":"us-east"}`))
+	rec := httptest.NewRecorder()
+
+	s.handleCreateOperatorEnrollment(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestOperatorEnrollmentRequiresSignedOperator(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	otherKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey other: %v", err)
+	}
+	operator := crypto.PubkeyToAddress(otherKey.PublicKey)
+	s := newTestEnrollmentServer()
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/operator/enrollments",
+		signedEnrollmentCreateBody(t, s, key, operator.Hex(), "us-east"),
+	)
+	rec := httptest.NewRecorder()
+
+	s.handleCreateOperatorEnrollment(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestOperatorEnrollmentRejectsMismatchedReportOperator(t *testing.T) {
+	store := newOperatorEnrollmentStore(time.Hour)
+	created, err := store.create("0x1234567890abcdef1234567890abcdef12345678", "us-east")
+	if err != nil {
+		t.Fatalf("create enrollment: %v", err)
+	}
+	s := &Server{enrollments: store}
+
+	report := `{"operator":"0x9999999999999999999999999999999999999999","health_ok":true}`
+	req := httptest.NewRequest(http.MethodPost, "/operator/enrollments/"+created.Token+"/report", strings.NewReader(report))
+	rec := httptest.NewRecorder()
+
+	s.handleReportOperatorEnrollment(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func newTestEnrollmentServer() *Server {
+	return &Server{
+		enrollments: newOperatorEnrollmentStore(time.Hour),
+		siwe:        siwe.NewService("test.example.com", "https://test.example.com", 5*time.Minute, 16),
+	}
+}
+
+func signedEnrollmentCreateBody(
+	t *testing.T,
+	s *Server,
+	key *ecdsa.PrivateKey,
+	operator string,
+	region string,
+) *bytes.Reader {
+	t.Helper()
+
+	challenge, err := s.siwe.NewChallenge(16)
+	if err != nil {
+		t.Fatalf("NewChallenge: %v", err)
+	}
+	message := siwe.FormatMessage(challenge, crypto.PubkeyToAddress(key.PublicKey).Hex())
+	sig, err := signEnrollmentMessage(key, message)
+	if err != nil {
+		t.Fatalf("sign enrollment message: %v", err)
+	}
+
+	body, err := json.Marshal(createOperatorEnrollmentRequest{
+		Operator:  operator,
+		Region:    region,
+		Message:   message,
+		Signature: sig,
+	})
+	if err != nil {
+		t.Fatalf("marshal create request: %v", err)
+	}
+	return bytes.NewReader(body)
+}
+
+func signEnrollmentMessage(key *ecdsa.PrivateKey, message string) (string, error) {
+	sig, err := crypto.Sign(accounts.TextHash([]byte(message)), key)
+	if err != nil {
+		return "", err
+	}
+	sig[64] += 27
+	return hexutil.Encode(sig), nil
 }
 
 func hexString(b byte) string {

@@ -21,6 +21,7 @@ export default defineConfig({
       '/session': 'http://localhost:8080',
       '/subscription': 'http://localhost:8080',
       '/payout': 'http://localhost:8080',
+      '/operator': 'http://localhost:8080',
     },
   },
 })

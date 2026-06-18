@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount } from 'wagmi';
+import { useAccount, useSignMessage } from 'wagmi';
 import {
   NODE_REGISTRY_ADDRESS,
   PAYOUT_VAULT_ADDRESS,
@@ -11,15 +11,7 @@ const INSTALL_SCRIPT_URL = 'https://raw.githubusercontent.com/maybehotcarl/sover
 const DEFAULT_GATEWAY_PORT = '8080';
 const DEFAULT_WG_PORT = '51820';
 const DEFAULT_REGION = 'us-east';
-
-function generateEnrollmentToken() {
-  const bytes = new Uint8Array(12);
-  if (window.crypto?.getRandomValues) {
-    window.crypto.getRandomValues(bytes);
-    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-  }
-  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
-}
+const OPERATOR_API_BASE = (import.meta.env.VITE_CONTROL_PLANE_URL || '').replace(/\/+$/, '');
 
 function shellQuote(value) {
   const text = String(value);
@@ -34,6 +26,23 @@ function gatewayUrlFromHost(host, port) {
   return `http://${trimmed}:${port}`;
 }
 
+function operatorApi(path) {
+  return `${OPERATOR_API_BASE}${path}`;
+}
+
+function currentControlPlaneUrl() {
+  if (OPERATOR_API_BASE) return OPERATOR_API_BASE;
+  return typeof window === 'undefined' ? '' : window.location.origin;
+}
+
+async function readJson(resp) {
+  try {
+    return await resp.json();
+  } catch {
+    return {};
+  }
+}
+
 function buildInstallCommand({
   address,
   enrollmentToken,
@@ -46,10 +55,12 @@ function buildInstallCommand({
   subscriptionManager,
   payoutVault,
   delegationEnabled,
+  controlPlaneUrl,
 }) {
   const argLines = [
     `--enroll ${shellQuote(enrollmentToken)}`,
     `--region ${shellQuote(region)}`,
+    `--control-plane-url ${shellQuote(controlPlaneUrl)}`,
   ];
 
   if (address) argLines.push(`--operator ${shellQuote(address)}`);
@@ -68,7 +79,7 @@ function buildInstallCommand({
 
 export default function OperatorEnrollment() {
   const { address, isConnected } = useAccount();
-  const [enrollmentToken, setEnrollmentToken] = useState(() => generateEnrollmentToken());
+  const { signMessageAsync } = useSignMessage();
   const [publicHost, setPublicHost] = useState('');
   const [rpcUrl, setRpcUrl] = useState('');
   const [region, setRegion] = useState(DEFAULT_REGION);
@@ -81,6 +92,11 @@ export default function OperatorEnrollment() {
   const [copyLabel, setCopyLabel] = useState('Copy');
   const [healthUrl, setHealthUrl] = useState('');
   const [healthState, setHealthState] = useState({ status: 'idle', message: '' });
+  const [enrollment, setEnrollment] = useState(null);
+  const [enrollmentState, setEnrollmentState] = useState({ status: 'idle', message: '' });
+
+  const controlPlaneUrl = currentControlPlaneUrl();
+  const enrollmentToken = enrollment?.token || '';
 
   const installCommand = useMemo(() => buildInstallCommand({
     address,
@@ -94,8 +110,10 @@ export default function OperatorEnrollment() {
     subscriptionManager,
     payoutVault,
     delegationEnabled,
+    controlPlaneUrl,
   }), [
     address,
+    controlPlaneUrl,
     delegationEnabled,
     enrollmentToken,
     gatewayPort,
@@ -109,8 +127,75 @@ export default function OperatorEnrollment() {
   ]);
 
   const defaultHealthUrl = gatewayUrlFromHost(publicHost, gatewayPort);
+  const hasEnrollment = Boolean(enrollmentToken);
+
+  useEffect(() => {
+    setEnrollment(null);
+    setEnrollmentState({ status: 'idle', message: '' });
+  }, [address]);
+
+  useEffect(() => {
+    if (!enrollment?.token) return undefined;
+
+    const poll = async () => {
+      try {
+        const resp = await fetch(operatorApi(`/operator/enrollments/${enrollment.token}`));
+        if (!resp.ok) return;
+        const data = await resp.json();
+        setEnrollment(data);
+      } catch {
+        // Keep the last known status; polling is best-effort.
+      }
+    };
+
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [enrollment?.token]);
+
+  const createEnrollment = async () => {
+    if (!address) {
+      setEnrollmentState({ status: 'error', message: 'Connect your operator wallet first.' });
+      return;
+    }
+
+    setEnrollmentState({ status: 'creating', message: 'Preparing wallet signature...' });
+    try {
+      const challengeResp = await fetch(operatorApi('/auth/challenge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
+      });
+      const challenge = await readJson(challengeResp);
+      if (!challengeResp.ok) throw new Error(challenge.error || 'Failed to get signing challenge');
+
+      setEnrollmentState({ status: 'creating', message: 'Sign the operator enrollment message...' });
+      const signature = await signMessageAsync({ message: challenge.message });
+
+      setEnrollmentState({ status: 'creating', message: 'Creating enrollment token...' });
+      const resp = await fetch(operatorApi('/operator/enrollments'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operator: address,
+          region,
+          message: challenge.message,
+          signature,
+        }),
+      });
+      const data = await readJson(resp);
+      if (!resp.ok) throw new Error(data.error || 'Enrollment failed');
+      setEnrollment(data);
+      setEnrollmentState({ status: 'ready', message: 'Enrollment token ready.' });
+    } catch (err) {
+      setEnrollmentState({
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Enrollment API unavailable',
+      });
+    }
+  };
 
   const copyCommand = async () => {
+    if (!hasEnrollment) return;
     await navigator.clipboard.writeText(installCommand);
     setCopyLabel('Copied');
     setTimeout(() => setCopyLabel('Copy'), 1800);
@@ -152,15 +237,25 @@ export default function OperatorEnrollment() {
           <strong>Wallet</strong>
           <small>{isConnected ? `${address.slice(0, 6)}...${address.slice(-4)}` : 'Connect operator wallet'}</small>
         </div>
-        <div className="operator-check done">
+        <div className={`operator-check${enrollment?.report ? ' done' : hasEnrollment ? '' : enrollmentState.status === 'error' ? ' error' : ''}`}>
           <span>2</span>
           <strong>Install</strong>
-          <small>Paste command on Ubuntu VPS</small>
+          <small>
+            {enrollment?.report
+              ? 'Node reported from VPS'
+              : hasEnrollment
+                ? 'Paste command on Ubuntu VPS'
+                : enrollmentState.message || 'Create enrollment token'}
+          </small>
         </div>
-        <div className={`operator-check${healthState.status === 'ok' ? ' done' : healthState.status === 'error' ? ' error' : ''}`}>
+        <div className={`operator-check${enrollment?.status === 'healthy' || healthState.status === 'ok' ? ' done' : healthState.status === 'error' ? ' error' : ''}`}>
           <span>3</span>
           <strong>Verify</strong>
-          <small>{healthState.message || 'Run health check'}</small>
+          <small>
+            {enrollment?.status === 'healthy'
+              ? 'Installer reported healthy gateway'
+              : healthState.message || 'Run health check'}
+          </small>
         </div>
       </div>
 
@@ -233,18 +328,37 @@ export default function OperatorEnrollment() {
         <div className="command-card-header">
           <div>
             <strong>Install Command</strong>
-            <small>Run this on the VPS as root.</small>
+            <small>
+              {hasEnrollment
+                ? 'Run this on the VPS as root.'
+                : 'Connect your wallet and create an enrollment token first.'}
+            </small>
           </div>
           <div className="command-actions">
-            <button className="btn-secondary small" onClick={() => setEnrollmentToken(generateEnrollmentToken())}>
-              New Token
+            <button
+              className="btn-secondary small"
+              onClick={createEnrollment}
+              disabled={!isConnected || enrollmentState.status === 'creating'}
+            >
+              {enrollmentState.status === 'creating'
+                ? 'Creating...'
+                : hasEnrollment
+                  ? 'New Enrollment'
+                  : 'Create Enrollment'}
             </button>
-            <button className="btn-primary small" onClick={copyCommand}>
+            <button className="btn-primary small" onClick={copyCommand} disabled={!hasEnrollment}>
               {copyLabel}
             </button>
           </div>
         </div>
-        <pre className="command-output">{installCommand}</pre>
+        {enrollmentState.status === 'error' && (
+          <div className="operator-error">{enrollmentState.message}</div>
+        )}
+        {hasEnrollment ? (
+          <pre className="command-output">{installCommand}</pre>
+        ) : (
+          <div className="command-placeholder">No enrollment token yet.</div>
+        )}
       </div>
 
       <div className="verify-card">

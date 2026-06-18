@@ -58,11 +58,12 @@ The operator dashboard generates the longer form with enrollment metadata:
 curl -fsSL https://raw.githubusercontent.com/maybehotcarl/sovereign-vpn/main/node/install.sh \
   | sudo bash -s -- \
       --enroll "generated-token" \
+      --control-plane-url "https://6529vpn.io" \
       --operator "0xYourWallet" \
       --region "us-east"
 ```
 
-Today those values are stored in `node/.env` for dashboard/control-plane follow-up. They are intentionally safe metadata, not private keys.
+The dashboard issues the enrollment token after a wallet signature, then polls until the installer reports back. Those values are stored in `node/.env` for dashboard/control-plane follow-up. They are intentionally safe metadata, not private keys.
 
 ## Registration And Heartbeats
 

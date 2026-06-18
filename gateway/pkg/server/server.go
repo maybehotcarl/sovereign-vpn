@@ -60,6 +60,7 @@ type Server struct {
 	mux                 *http.ServeMux
 	corsOrigin          string
 	limiter             *ratelimit.Limiter
+	enrollments         *operatorEnrollmentStore
 }
 
 // New creates a new gateway server.
@@ -72,16 +73,17 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	}
 
 	s := &Server{
-		cfg:        cfg,
-		anonAuth:   anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1),
-		freeTier:   cfg.EnableFreeTier,
-		siwe:       siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
-		checker:    checker,
-		gate:       gate,
-		wg:         wg,
-		peerOwners: make(map[string]string),
-		mux:        http.NewServeMux(),
-		limiter:    limiter,
+		cfg:         cfg,
+		anonAuth:    anonauth.NewService(cfg.ChallengeTTL, cfg.NonceLength, "vpn_access_v1", 1),
+		freeTier:    cfg.EnableFreeTier,
+		siwe:        siwe.NewService(cfg.SIWEDomain, cfg.SIWEUri, cfg.ChallengeTTL, cfg.NonceLength),
+		checker:     checker,
+		gate:        gate,
+		wg:          wg,
+		peerOwners:  make(map[string]string),
+		mux:         http.NewServeMux(),
+		limiter:     limiter,
+		enrollments: newOperatorEnrollmentStore(operatorEnrollmentTTL),
 	}
 
 	// Public endpoints (no session required)
@@ -108,6 +110,11 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 
 	// Payout status (public — returns pending payout + 0zk address for an operator)
 	s.mux.HandleFunc("GET /payout/status", s.handlePayoutStatus)
+
+	// Operator enrollment (public token-based setup flow)
+	s.mux.HandleFunc("POST /operator/enrollments", s.handleCreateOperatorEnrollment)
+	s.mux.HandleFunc("GET /operator/enrollments/", s.handleGetOperatorEnrollment)
+	s.mux.HandleFunc("POST /operator/enrollments/", s.handleReportOperatorEnrollment)
 
 	return s
 }

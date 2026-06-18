@@ -547,6 +547,26 @@ footer a:hover { color: var(--accent); }
   font-size: 0.8rem;
 }
 
+.operator-error,
+.command-placeholder {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.operator-error {
+  color: var(--error);
+  background: rgba(244, 67, 54, 0.08);
+  border-color: rgba(244, 67, 54, 0.3);
+}
+
+.command-placeholder {
+  color: var(--muted);
+  background: var(--bg);
+}
+
 .command-output {
   margin-top: 14px;
   padding: 16px;

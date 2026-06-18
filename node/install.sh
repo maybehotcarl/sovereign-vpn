@@ -13,6 +13,7 @@
 #   --enroll TOKEN
 #   --operator ADDRESS
 #   --region REGION
+#   --control-plane-url URL
 #   --gateway-port PORT
 #   --wg-port PORT
 #   --node-registry ADDRESS
@@ -34,6 +35,8 @@ DEFAULT_GATEWAY_PORT="8080"
 DEFAULT_WG_PORT="51820"
 DEFAULT_SIWE_DOMAIN="6529vpn.io"
 DEFAULT_CORS_ORIGIN="https://6529vpn.io"
+DEFAULT_CONTROL_PLANE_URL="https://6529vpn.io"
+INSTALLER_VERSION="2026-06-18"
 
 REPO_URL="${REPO_URL:-$DEFAULT_REPO_URL}"
 REPO_REF="${REPO_REF:-$DEFAULT_REPO_REF}"
@@ -45,6 +48,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-$DEFAULT_GATEWAY_PORT}"
 WG_PORT="${WG_PORT:-$DEFAULT_WG_PORT}"
 SIWE_DOMAIN="${SIWE_DOMAIN:-$DEFAULT_SIWE_DOMAIN}"
 CORS_ORIGIN="${CORS_ORIGIN:-$DEFAULT_CORS_ORIGIN}"
+CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-$DEFAULT_CONTROL_PLANE_URL}"
 ENROLLMENT_TOKEN="${ENROLLMENT_TOKEN:-}"
 OPERATOR_ADDRESS="${OPERATOR_ADDRESS:-}"
 NODE_REGION="${NODE_REGION:-}"
@@ -73,6 +77,7 @@ Options:
   --enroll TOKEN                 Dashboard enrollment token.
   --operator ADDRESS             Operator wallet address.
   --region REGION                Node region label, such as us-east.
+  --control-plane-url URL        Enrollment callback base URL. Default: $DEFAULT_CONTROL_PLANE_URL
   --gateway-port PORT            Gateway HTTP port. Default: $DEFAULT_GATEWAY_PORT
   --wg-port PORT                 WireGuard UDP port. Default: $DEFAULT_WG_PORT
   --node-registry ADDRESS        Optional NodeRegistry contract address.
@@ -98,6 +103,7 @@ while [ "$#" -gt 0 ]; do
     --enroll) ENROLLMENT_TOKEN="${2:?missing value for --enroll}"; shift 2 ;;
     --operator) OPERATOR_ADDRESS="${2:?missing value for --operator}"; shift 2 ;;
     --region) NODE_REGION="${2:?missing value for --region}"; shift 2 ;;
+    --control-plane-url) CONTROL_PLANE_URL="${2:?missing value for --control-plane-url}"; shift 2 ;;
     --gateway-port) GATEWAY_PORT="${2:?missing value for --gateway-port}"; shift 2 ;;
     --wg-port) WG_PORT="${2:?missing value for --wg-port}"; shift 2 ;;
     --node-registry) NODE_REGISTRY="${2:?missing value for --node-registry}"; shift 2 ;;
@@ -215,6 +221,7 @@ THIS_CARD_ID=$THIS_CARD_ID
 MAX_TOKEN_ID=$MAX_TOKEN_ID
 WG_DNS=$WG_DNS
 DELEGATION=$ENABLE_DELEGATION
+CONTROL_PLANE_URL=$CONTROL_PLANE_URL
 EOF
 
   if [ -n "$ENROLLMENT_TOKEN" ]; then
@@ -280,10 +287,14 @@ wait_for_health() {
   log "Waiting for gateway health"
   local url="http://127.0.0.1:$GATEWAY_PORT/health"
   local attempt
+  HEALTH_OK=false
+  HEALTH_STATUS="unreachable"
 
   for attempt in $(seq 1 30); do
     if curl -fsS "$url" >/tmp/sovereign-vpn-health.json 2>/dev/null; then
       cat /tmp/sovereign-vpn-health.json
+      HEALTH_OK=true
+      HEALTH_STATUS="$(jq -r '.status // "ok"' /tmp/sovereign-vpn-health.json 2>/dev/null || echo ok)"
       rm -f /tmp/sovereign-vpn-health.json
       return
     fi
@@ -293,6 +304,54 @@ wait_for_health() {
   rm -f /tmp/sovereign-vpn-health.json
   warn "Gateway did not become healthy within 60 seconds. Check logs with:"
   echo "  docker compose -f $INSTALL_DIR/node/docker-compose.yml --env-file $INSTALL_DIR/node/.env logs -f"
+}
+
+report_enrollment() {
+  if [ -z "$ENROLLMENT_TOKEN" ]; then
+    return
+  fi
+
+  log "Reporting enrollment status"
+
+  local public_key=""
+  public_key="$(
+    docker compose -f "$INSTALL_DIR/node/docker-compose.yml" --env-file "$INSTALL_DIR/node/.env" \
+      exec -T sovereign-vpn sh -c 'cat /etc/wireguard/publickey 2>/dev/null' 2>/dev/null || true
+  )"
+
+  local payload
+  payload="$(
+    jq -n \
+      --arg operator "$OPERATOR_ADDRESS" \
+      --arg region "${NODE_REGION:-unknown}" \
+      --arg endpoint "$PUBLIC_IP:$WG_PORT" \
+      --arg gateway_url "http://$PUBLIC_IP:$GATEWAY_PORT" \
+      --arg public_ip "$PUBLIC_IP" \
+      --arg gateway_port "$GATEWAY_PORT" \
+      --arg wireguard_port "$WG_PORT" \
+      --arg wireguard_public_key "$public_key" \
+      --arg health_status "${HEALTH_STATUS:-unreachable}" \
+      --arg installer_version "$INSTALLER_VERSION" \
+      --argjson health_ok "${HEALTH_OK:-false}" \
+      '{
+        operator: $operator,
+        region: $region,
+        endpoint: $endpoint,
+        gateway_url: $gateway_url,
+        public_ip: $public_ip,
+        gateway_port: $gateway_port,
+        wireguard_port: $wireguard_port,
+        wireguard_public_key: $wireguard_public_key,
+        health_ok: $health_ok,
+        health_status: $health_status,
+        installer_version: $installer_version
+      }'
+  )"
+
+  local report_url="${CONTROL_PLANE_URL%/}/operator/enrollments/$ENROLLMENT_TOKEN/report"
+  if ! curl -fsS --connect-timeout 5 --max-time 15 -X POST "$report_url" -H "Content-Type: application/json" -d "$payload" >/dev/null; then
+    warn "Could not report enrollment status to $report_url"
+  fi
 }
 
 print_summary() {
@@ -326,4 +385,5 @@ write_env
 open_firewall_ports
 start_node
 wait_for_health
+report_enrollment
 print_summary
