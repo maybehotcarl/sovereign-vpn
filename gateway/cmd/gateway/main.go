@@ -87,6 +87,9 @@ func main() {
 	// PayoutVault flags
 	payoutVaultContract := flag.String("payout-vault", "", "PayoutVault contract address (enables payout status endpoint)")
 
+	// Operator enrollment storage flags
+	enrollmentDBURL := flag.String("enrollment-db-url", "", "Postgres database URL for durable operator enrollment storage")
+
 	// ZK verification flags
 	zkAPIURL := flag.String("zk-api-url", "", "ZK service API URL (enables ZK proof verification)")
 	zkAPIKey := flag.String("zk-api-key", "", "ZK service API key")
@@ -98,6 +101,9 @@ func main() {
 	}
 	if *heartbeatKey == "" {
 		*heartbeatKey = os.Getenv("HEARTBEAT_KEY")
+	}
+	if *enrollmentDBURL == "" {
+		*enrollmentDBURL = os.Getenv("ENROLLMENT_DATABASE_URL")
 	}
 
 	// Load config
@@ -234,6 +240,22 @@ func main() {
 	srv := server.New(cfg, checker, wgManager)
 	srv.SetChainID(*chainID)
 	log.Printf("Free tier enabled: %v", cfg.EnableFreeTier)
+
+	if *enrollmentDBURL != "" {
+		enrollmentStore, err := server.NewPostgresOperatorEnrollmentStore(
+			context.Background(),
+			*enrollmentDBURL,
+			server.DefaultOperatorEnrollmentTTL,
+		)
+		if err != nil {
+			log.Fatalf("Failed to create enrollment database store: %v", err)
+		}
+		defer enrollmentStore.Close()
+		srv.SetOperatorEnrollmentStore(enrollmentStore)
+		log.Printf("Operator enrollment storage: postgres")
+	} else {
+		log.Printf("Operator enrollment storage: memory")
+	}
 
 	if *corsOrigin != "" {
 		srv.SetCORSOrigin(*corsOrigin)

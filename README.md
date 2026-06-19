@@ -152,6 +152,10 @@ sudo wg-quick up ./sovereign-vpn.conf
 
 See [deploy/setup-node.sh](deploy/setup-node.sh) for full VPS setup.
 
+### Durable operator enrollment
+
+Operator-dashboard enrollment tokens are in-memory by default for local development. For production, run the Supabase migration in `supabase/migrations/`, then set `ENROLLMENT_DATABASE_URL` on the control-plane gateway. The gateway will persist enrollment tokens and installer reports in Supabase Postgres; individual VPN node VMs do not need database credentials.
+
 ## Repository Structure
 
 ```

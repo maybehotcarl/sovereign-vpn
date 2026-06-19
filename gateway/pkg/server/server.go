@@ -60,7 +60,7 @@ type Server struct {
 	mux                 *http.ServeMux
 	corsOrigin          string
 	limiter             *ratelimit.Limiter
-	enrollments         *operatorEnrollmentStore
+	enrollments         OperatorEnrollmentStore
 }
 
 // New creates a new gateway server.
@@ -83,7 +83,7 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 		peerOwners:  make(map[string]string),
 		mux:         http.NewServeMux(),
 		limiter:     limiter,
-		enrollments: newOperatorEnrollmentStore(operatorEnrollmentTTL),
+		enrollments: newOperatorEnrollmentStore(DefaultOperatorEnrollmentTTL),
 	}
 
 	// Public endpoints (no session required)
@@ -117,6 +117,13 @@ func New(cfg *config.Config, checker nftcheck.AccessChecker, wg *wireguard.Manag
 	s.mux.HandleFunc("POST /operator/enrollments/", s.handleReportOperatorEnrollment)
 
 	return s
+}
+
+// SetOperatorEnrollmentStore configures durable operator enrollment storage.
+func (s *Server) SetOperatorEnrollmentStore(store OperatorEnrollmentStore) {
+	if store != nil {
+		s.enrollments = store
+	}
 }
 
 // SetChainID sets the expected chain ID for SIWE verification.

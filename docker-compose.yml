@@ -16,6 +16,8 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
       - ./gateway/config.json:/etc/sovereign-vpn/config.json:ro
+    environment:
+      - ENROLLMENT_DATABASE_URL=${ENROLLMENT_DATABASE_URL:-}
     command:
       - "--config=/etc/sovereign-vpn/config.json"
       - "--wg-interface=wg0"
