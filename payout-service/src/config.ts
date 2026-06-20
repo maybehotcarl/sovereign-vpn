@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { JsonRpcProvider } from "ethers";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -150,4 +151,25 @@ export function loadConfig(): Config {
   };
 
   return config;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime chain-ID verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch `eth_chainId` from the RPC provider and verify it matches the
+ * configured value. Throws a fatal error on mismatch so the service refuses
+ * to start against the wrong network.
+ */
+export async function verifyChainId(config: Config): Promise<void> {
+  const provider = new JsonRpcProvider(config.ethRpcUrl);
+  const network = await provider.getNetwork();
+  const remoteChainId = Number(network.chainId);
+
+  if (remoteChainId !== config.chainId) {
+    throw new Error(
+      `Chain ID mismatch: configured ${config.chainId} but provider returned ${remoteChainId}`,
+    );
+  }
 }
