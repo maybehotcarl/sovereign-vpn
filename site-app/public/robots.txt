@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /auth/
+Disallow: /downloads/
+Disallow: /health
+Disallow: /nodes
+Disallow: /operator/
+Disallow: /payout/
+Disallow: /session/
+Disallow: /subscription/
+Disallow: /vpn/
+
+Sitemap: https://6529vpn.io/sitemap.xml

@@ -23,6 +23,12 @@
 	handle /payout/* {
 		reverse_proxy localhost:8080
 	}
+	handle /operator* {
+		reverse_proxy localhost:8080
+	}
+	handle /downloads* {
+		respond "Not found" 404
+	}
 
 	# Everything else — static frontend with SPA fallback
 	handle {

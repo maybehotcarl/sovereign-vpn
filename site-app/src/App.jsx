@@ -133,24 +133,18 @@ export default function App() {
           <section>
             <h2>CLI Client</h2>
             <p style={{ color: 'var(--muted)', marginBottom: 16 }}>
-              Prefer the command line? Download <code>svpn</code> for your platform:
+              Prefer the command line? Build <code>svpn</code> from source while packaged releases are being prepared:
             </p>
-            <div className="downloads">
-              <a href="/downloads/svpn-darwin-arm64" className="dl-btn">
-                <div><div className="os">macOS</div><div className="arch">Apple Silicon (M1/M2/M3)</div></div>
-              </a>
-              <a href="/downloads/svpn-darwin-amd64" className="dl-btn">
-                <div><div className="os">macOS</div><div className="arch">Intel</div></div>
-              </a>
-              <a href="/downloads/svpn-linux-amd64" className="dl-btn">
-                <div><div className="os">Linux</div><div className="arch">x86_64</div></div>
-              </a>
-              <a href="/downloads/svpn-windows-amd64.exe" className="dl-btn">
-                <div><div className="os">Windows</div><div className="arch">x86_64</div></div>
-              </a>
-            </div>
+            <a
+              className="dl-btn"
+              href="https://github.com/maybehotcarl/sovereign-vpn/tree/main/client"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <div><div className="os">CLI Source</div><div className="arch">Go client for WireGuard sessions</div></div>
+            </a>
             <div className="code-block" style={{ marginTop: 16 }}>
-              <span className="cmd">./svpn connect --gateway https://6529vpn.io --key wallet.key</span>
+              <span className="cmd">cd client && go build -o ../bin/svpn ./cmd/svpn</span>
             </div>
           </section>
         </>
@@ -161,7 +155,7 @@ export default function App() {
           <a href="https://github.com/maybehotcarl/sovereign-vpn">GitHub</a>
           <a href="https://6529.io/the-memes">The Memes</a>
           <a href="https://6529.io">6529</a>
-          <a href="/health">API Status</a>
+          <a href="/health" rel="nofollow">API Status</a>
         </div>
         <p>Built for the 6529 community</p>
       </footer>

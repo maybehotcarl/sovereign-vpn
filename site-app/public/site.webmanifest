@@ -1,0 +1,14 @@
+{
+  "name": "6529 VPN",
+  "short_name": "6529 VPN",
+  "description": "Direct and anonymous WireGuard access for Memes holders.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {"src": "/favicon-32x32.png", "sizes": "32x32", "type": "image/png"},
+    {"src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png"},
+    {"src": "/vpn-logo.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
